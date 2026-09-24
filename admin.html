@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <base target="_top">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div class="sidebar-header"><h1>ワークフロー</h1><button class="btn btn-primary btn-sm" onclick="createNew()"><span class="mi" style="font-size:18px">add</span>新規</button></div>
+    <div class="wf-search"><span class="mi wf-search-icon">search</span><input type="text" id="wfSearch" placeholder="名前で絞り込み" oninput="renderList()"></div>
+    <div class="wf-list" id="wfList"></div>
+    <div class="sidebar-footer">
+      <button class="btn btn-ghost" onclick="openMasterSheet()">管理データ</button>
+      <button class="btn btn-ghost" onclick="showAdmins()">管理者</button>
+      <button class="btn btn-ghost" onclick="showArchive()">アーカイブ</button>
+      <button class="btn btn-ghost" onclick="showHelp()">ヘルプ</button>
+      <div class="sidebar-meta">
+        <span>v<?!= appVersion ?> · <?!= envName ?></span>
+        <a href="mailto:<?!= contactEmail ?>?subject=%5BWorkflow%20Bot%5D%20%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B" class="sidebar-meta-link">問い合わせ</a>
+      </div>
+    </div>
+  </div>
+  <div class="main" id="mainArea"><div class="empty"><span class="mi" style="font-size:56px;color:var(--c-text-faint)">assignment</span><p>左のリストからワークフローを選択するか、<br>「新規」で作成してください</p></div></div>
+</div>
+<script>
+  var __initialData = <?!= initialData ?>;
+  var __initialAdmins = <?!= initialAdmins ?>;
+  var __currentUser = '<?!= currentUser ?>';
+  var __contactEmail = '<?!= contactEmail ?>';
+</script>
+<?!= include('JavaScript'); ?>
+</body>
+</html>

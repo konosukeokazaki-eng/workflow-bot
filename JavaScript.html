@@ -1,0 +1,613 @@
+<script>
+/* ============================================================
+   State
+   ============================================================ */
+var workflows=[], currentWfId=null, currentFields=[], currentButtons=[], spaces=[], admins=[];
+var isDirty=false;
+var wfEditorTab='basic';
+var COLORS={green:'#34a853',blue:'#1a73e8',yellow:'#f9ab00',orange:'#e65100',red:'#c62828',gray:'#888'};
+var EMOJI={green:'✅',blue:'🔵',yellow:'🟡',orange:'🟠',red:'❌',gray:'⚫'};
+var currentUser=__currentUser||'';
+
+/* ============================================================
+   Init
+   ============================================================ */
+window.onload=function(){
+  try{workflows=__initialData||[];}catch(e){}
+  try{admins=__initialAdmins||[];}catch(e){}
+  renderList();
+  google.script.run.withSuccessHandler(function(d){spaces=d||[];}).withFailureHandler(noop).api_getSpaces();
+  google.script.run.withSuccessHandler(function(s){if(s&&!s.accepted)showPrivacyModal();}).withFailureHandler(noop).api_getPrivacyStatus();
+};
+function showPrivacyModal(){
+  var ov=mk('modal-overlay');
+  ov.innerHTML=''
+    +'<div class="modal" style="max-width:520px">'
+    +'<h3>プライバシー通知への同意</h3>'
+    +'<p style="font-size:13px;color:var(--c-text-sub);margin:12px 0">Workflow Bot を管理者として使用する前に、以下の内容にご同意ください。</p>'
+    +'<div style="max-height:280px;overflow:auto;padding:12px;background:var(--c-bg-alt,#f7f7f8);border-radius:8px;font-size:12px;line-height:1.7">'
+    +'<p><strong>取得する情報</strong>：氏名、メールアドレス、業務上入力される申請本文</p>'
+    +'<p><strong>利用目的</strong>：申請・承認フローの実行、監査ログの保持</p>'
+    +'<p><strong>保管場所</strong>：Google Workspace 内スプレッドシート(社内 Drive)。外部サービスへの送信はありません。</p>'
+    +'<p><strong>保管期間</strong>：申請データ 3年、監査ログ 1年(オンライン)+ アーカイブ 3年、バックアップ 30世代</p>'
+    +'<p><strong>アクセス制御</strong>：管理画面は _管理者 シートに登録されたユーザのみアクセス可能。全操作は監査ログに記録されます。</p>'
+    +'<p><strong>問い合わせ先</strong>：'+esc(__contactEmail||'')+'</p>'
+    +'</div>'
+    +'<div class="actions"><button class="btn btn-primary" onclick="acceptPrivacy()">同意して続行</button></div>'
+    +'</div>';
+  document.body.appendChild(ov);
+}
+function acceptPrivacy(){
+  showLoading('記録中...');
+  google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){document.querySelector('.modal-overlay').remove();showToast('ご同意ありがとうございます');}else{showToast('エラー: '+(r.error||''));}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_recordPrivacyAcceptance();
+}
+window.onbeforeunload=function(){if(isDirty)return '未保存の変更があります。ページを離れますか？';};
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){var ov=document.querySelector('.modal-overlay');if(ov)ov.remove();}});
+
+/* ============================================================
+   Sidebar List
+   ============================================================ */
+function renderList(){
+  var el=document.getElementById('wfList');
+  if(!workflows.length){el.innerHTML='<div class="empty"><p style="font-size:13px">ワークフローがありません</p></div>';return;}
+  var q=(document.getElementById('wfSearch')||{}).value||'';
+  q=q.trim().toLowerCase();
+  var filtered=q?workflows.filter(function(w){return String(w.name||'').toLowerCase().indexOf(q)!==-1;}):workflows;
+  if(!filtered.length){el.innerHTML='<div class="empty"><p style="font-size:13px">「'+esc(q)+'」に一致するワークフローはありません</p></div>';return;}
+  el.innerHTML=filtered.map(function(wf){
+    var tb=wf.type==='申請・承認'?'<span class="badge badge-approval">承認</span>':'<span class="badge badge-template">定型文</span>';
+    var sb=wf.status==='有効'?'<span class="badge badge-active">有効</span>':'<span class="badge badge-inactive">無効</span>';
+    return '<div class="wf-item'+(wf.id===currentWfId?' active':'')+'" onclick="selectWf('+wf.id+')"><div class="wf-item-left"><div class="wf-item-name">'+esc(wf.name)+'</div><div class="wf-item-meta">'+tb+sb+'</div></div><label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" '+(wf.status==='有効'?'checked':'')+' onchange="toggleWf('+wf.id+')"><span class="toggle-slider"></span></label></div>';
+  }).join('');
+}
+function toggleWf(id){run('api_toggleStatus',id,function(r){if(r.success){var w=workflows.find(function(w){return w.id===id});if(w)w.status=r.status;renderList();showToast((r.status==='有効'?'有効':'無効')+'にしました');}});}
+function selectWf(id){
+  if(isDirty&&!confirm('未保存の変更があります。破棄しますか？'))return;
+  isDirty=false;currentWfId=id;wfEditorTab='basic';renderList();
+  run('api_getWorkflowDetail',id,function(d){currentFields=d.fields||[];currentButtons=d.buttons||[];renderEditor();});
+}
+function createNew(){
+  if(isDirty&&!confirm('未保存の変更があります。破棄しますか？'))return;
+  isDirty=false;currentWfId=null;currentFields=[];currentButtons=[];wfEditorTab='basic';renderEditor();
+}
+
+/* ============================================================
+   Editor
+   ============================================================ */
+function renderEditor(){
+  var wf=currentWfId?workflows.find(function(w){return w.id===currentWfId}):null;
+  var name=wf?wf.name:'',type=wf?wf.type:'申請・承認',es=wf?wf.execSpace:'',ts=wf?wf.targetSpace:'',extSheet=wf?wf.externalSheet||'':'';
+  var spO='<option value="">選択してください</option>'+spaces.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>';}).join('');
+  var tab=wfEditorTab||'basic';
+  var left='<div class="panel"><h2>'+(wf?esc(wf.name):'新規ワークフロー');
+  if(wf)left+='<div style="display:flex;gap:5px"><button class="btn btn-sm" onclick="deployButton()" style="background:#e8f0fe;color:var(--c-primary)">設置</button><button class="btn btn-sm btn-danger" onclick="deleteWf()">削除</button></div>';
+  left+='</h2>';
+  // Chip nav
+  left+='<div class="chip-nav">'
+    +'<button class="chip'+(tab==='basic'?' active':'')+'" onclick="setWfTab(\'basic\')"><span class="chip-num">1</span>基本情報<span class="chip-error-dot" id="dotBasic" style="display:none"></span></button>'
+    +'<button class="chip'+(tab==='fields'?' active':'')+'" onclick="setWfTab(\'fields\')"><span class="chip-num">2</span>フォーム項目<span class="chip-error-dot" id="dotFields" style="display:none"></span></button>'
+    +'<button class="chip'+(tab==='notify'?' active':'')+'" onclick="setWfTab(\'notify\')"><span class="chip-num">3</span>'+(type==='申請・承認'?'承認・通知':'通知設定')+'<span class="chip-error-dot" id="dotNotify" style="display:none"></span></button>'
+    +'</div>';
+  // Section 1: 基本情報
+  left+='<div class="editor-section'+(tab!=='basic'?' hidden':'')+'" id="secBasic">'
+    +'<div class="form-row"><div class="form-group"><label>ワークフロー名</label><input type="text" id="wfName" value="'+esc(name)+'" oninput="markDirty();updatePreview()"><div class="error-msg" id="errName">ワークフロー名を入力してください</div></div><div class="form-group"><label>種類</label><select id="wfType" onchange="markDirty();renderEditor()"><option value="申請・承認"'+(type==='申請・承認'?' selected':'')+'>申請・承認</option><option value="定型文送信"'+(type==='定型文送信'?' selected':'')+'>定型文送信</option></select></div></div>'
+    +'<div class="form-row"><div class="form-group"><label>実行スペース</label><select id="wfExecSpace" onchange="markDirty()">'+spO+'</select><div class="error-msg" id="errExec">実行スペースを選択してください</div></div><div class="form-group"><label>送信先スペース</label><select id="wfTargetSpace" onchange="markDirty()">'+spO+'</select><div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'
+    +'</div>';
+  // Section 2: フォーム項目
+  left+='<div class="editor-section'+(tab!=='fields'?' hidden':'')+'" id="secFields">'
+    +'<div class="section-label">フォーム項目</div><div class="field-list" id="fieldList">'+renderFields()+'</div><button class="btn-add" onclick="addField()"><span class="mi" style="font-size:18px">add</span>項目を追加</button><div class="error-msg" id="errFields">項目を1つ以上追加してください</div>'
+    +'</div>';
+  // Section 3: 承認・通知
+  var s3='<div class="editor-section'+(tab!=='notify'?' hidden':'')+'" id="secNotify">';
+  if(type==='申請・承認'){
+    s3+='<div class="form-group"><label>承認者（送信先スペースから選択、空欄＝全員可）</label><div style="display:flex;gap:6px;align-items:center"><input type="text" id="wfApprovers" value="'+esc(wf?wf.approvers||'':'')+'" placeholder="メンバーから選択 or メール手入力（カンマ区切り）" oninput="markDirty()" style="flex:1"><button type="button" class="btn btn-sm" onclick="openApproverPicker()" style="white-space:nowrap"><span class="mi" style="font-size:16px;vertical-align:middle">group</span>メンバーから選択</button></div><input type="hidden" id="wfApproverUserIds" value="'+esc(wf?wf.approverUserIds||'':'')+'"><div id="wfApproverIdsHint" style="font-size:11px;color:var(--c-text-muted);margin-top:4px">'+(wf&&wf.approverUserIds?'✅ '+wf.approverUserIds.split(',').filter(function(s){return s.trim()}).length+'名にメンション通知が飛びます':'※メンバーから選択すると承認時に @メンション通知が飛びます')+'</div></div>';
+    s3+='<div class="form-group"><label>メンション文言（承認者の @メンションに続く文）</label><input type="text" id="wfMentionText" value="'+esc(wf?wf.mentionText||'':'')+'" placeholder="承認をお願いします" oninput="markDirty()"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">空欄なら「承認をお願いします」。変数: {申請者} {ワークフロー}</div></div>';
+    s3+='<div class="section-label">アクションボタン</div><div class="field-list" id="btnList">'+renderButtons()+'</div><button class="btn-add" onclick="addButton()"><span class="mi" style="font-size:18px">add</span>ボタンを追加</button>';
+  }
+  s3+='<div class="form-group" style="margin-top:16px"><div class="checkbox-row"><input type="checkbox" id="wfExtCheck"'+(extSheet?' checked':'')+' onchange="markDirty();document.getElementById(\'wfExtUrl\').style.display=this.checked?\'\':\'none\'"><label for="wfExtCheck">外部スプレッドシートにもデータをコピーする</label></div><div id="wfExtUrl" style="'+(extSheet?'':'display:none')+';margin-top:8px"><input type="text" id="wfExtSheet" value="'+esc(extSheet)+'" placeholder="https://docs.google.com/spreadsheets/d/..." oninput="markDirty()"></div></div>';
+  s3+='</div>';
+  left+=s3;
+  left+='<div class="actions"><button class="btn" onclick="cancel()">キャンセル</button><button class="btn btn-primary" onclick="save()">保存</button></div></div>';
+  var right='<div><div class="panel preview-section"><h2>カードプレビュー</h2><div id="previewCard"></div></div>';
+  if(type==='申請・承認')right+='<div class="panel preview-section"><h2>アクションフロー</h2><div id="previewFlow"></div></div>';
+  right+='</div>';
+  document.getElementById('mainArea').innerHTML='<div class="main-inner">'+left+right+'</div>';
+  setTimeout(function(){if(es)document.getElementById('wfExecSpace').value=es;if(ts)document.getElementById('wfTargetSpace').value=ts;initSortable();updatePreview();},50);
+}
+function setWfTab(t){
+  wfEditorTab=t;
+  ['secBasic','secFields','secNotify'].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.add('hidden');});
+  var map={basic:'secBasic',fields:'secFields',notify:'secNotify'};
+  var target=document.getElementById(map[t]);if(target)target.classList.remove('hidden');
+  document.querySelectorAll('.chip-nav .chip').forEach(function(c){c.classList.remove('active');});
+  var chips=document.querySelectorAll('.chip-nav .chip');
+  var idx={basic:0,fields:1,notify:2}[t];
+  if(chips[idx])chips[idx].classList.add('active');
+}
+function markDirty(){isDirty=true;}
+function initSortable(){
+  var fl=document.getElementById('fieldList');if(fl)Sortable.create(fl,{animation:150,ghostClass:'sortable-ghost',chosenClass:'sortable-chosen',handle:'.field-grip',onEnd:function(e){var it=currentFields.splice(e.oldIndex,1)[0];currentFields.splice(e.newIndex,0,it);markDirty();updatePreview();}});
+  var bl=document.getElementById('btnList');if(bl)Sortable.create(bl,{animation:150,ghostClass:'sortable-ghost',handle:'.field-grip',onEnd:function(e){var it=currentButtons.splice(e.oldIndex,1)[0];currentButtons.splice(e.newIndex,0,it);markDirty();updatePreview();}});
+}
+
+/* ============================================================
+   Render Items
+   ============================================================ */
+function renderFields(){
+  if(!currentFields.length)return '<div style="padding:14px;text-align:center;color:var(--c-text-faint);font-size:12px">項目がありません</div>';
+  return currentFields.map(function(f,i){var tl={text:'テキスト',textarea:'複数行',dropdown:'プルダウン',checkbox:'チェックボックス',date:'日付'}[f.type]||f.type;return '<div class="field-item" data-index="'+i+'"><div class="field-info"><span class="field-grip mi">drag_indicator</span><span class="field-name">'+esc(f.name)+'</span><span class="field-type">'+tl+'</span>'+(f.required?'<span class="field-required">必須</span>':'')+'</div><div class="field-actions"><button class="btn btn-sm" onclick="editField('+i+')">編集</button><button class="btn btn-sm btn-danger" onclick="removeField('+i+')"><span class="mi" style="font-size:16px">close</span></button></div></div>';}).join('');
+}
+function renderButtons(){
+  if(!currentButtons.length)return '<div style="padding:14px;text-align:center;color:var(--c-text-faint);font-size:12px">ボタン未設定（デフォルトの承認/却下）</div>';
+  return currentButtons.map(function(b,i){return '<div class="btn-card" data-index="'+i+'"><div class="btn-card-header"><div class="btn-card-title"><span class="field-grip mi">drag_indicator</span><span class="btn-color" style="background:'+(COLORS[b.color]||'#888')+'"></span>'+esc(b.name)+'</div><div class="field-actions"><button class="btn btn-sm" onclick="editButton('+i+')">編集</button><button class="btn btn-sm btn-danger" onclick="removeButton('+i+')"><span class="mi" style="font-size:16px">close</span></button></div></div><div class="btn-card-sub">→ 「'+esc(b.status)+'」'+(b.threadReply?' ・<span class="mi" style="font-size:14px">reply</span> 返信':'')+'</div></div>';}).join('');
+}
+
+/* ============================================================
+   Preview
+   ============================================================ */
+function updatePreview(){
+  var ce=document.getElementById('previewCard'),fe=document.getElementById('previewFlow');if(!ce)return;
+  var nm=val('wfName')||'ワークフロー名',tp=val('wfType')||'申請・承認';
+  var ic=tp==='申請・承認'?'🔔':'📝',tt=tp==='申請・承認'?ic+' 新しい申請':ic+' '+esc(nm);
+  var rows='<div class="chat-card-row"><div class="chat-card-label">送信者</div><div class="chat-card-value">山田 太郎</div></div>';
+  currentFields.forEach(function(f){var s={dropdown:f.options?(f.options.split(',')[0].trim()):'選択肢',date:'2026/09/18',textarea:'テキスト内容...',checkbox:f.options?(f.options.split(',')[0].trim()):'選択肢'}[f.type]||'入力例';rows+='<div class="chat-card-row"><div class="chat-card-label">'+esc(f.name)+(f.required?' *':'')+'</div><div class="chat-card-value">'+esc(s)+'</div></div>';});
+  if(tp==='申請・承認')rows+='<div class="chat-card-row"><div class="chat-card-label">ステータス</div><div class="chat-card-value">⏳ 承認待ち</div></div>';
+  var btns='';if(tp==='申請・承認'){var bl=currentButtons.length?currentButtons:[{name:'承認',color:'green'},{name:'却下',color:'red'}];btns='<div class="chat-card-buttons">'+bl.map(function(b){return '<div class="chat-btn" style="background:'+(COLORS[b.color]||'#888')+'">'+esc(b.name)+'</div>';}).join('')+'</div>';}
+  ce.innerHTML='<div class="chat-card"><div class="chat-card-header"><div class="chat-card-header-title">'+tt+'</div><div class="chat-card-header-sub">'+esc(nm)+' - 山田 太郎</div></div><div class="chat-card-body">'+rows+'</div>'+btns+'</div><div class="preview-label">Google Chat での表示イメージ</div>';
+  if(fe&&tp==='申請・承認'){var bl2=currentButtons.length?currentButtons:[{name:'承認',status:'承認',color:'green',threadReply:false},{name:'却下',status:'却下',color:'red',threadReply:false}];var fh='';bl2.forEach(function(b,i){fh+='<div class="step-block"><div class="step-block-title">'+(EMOJI[b.color]||'⚪')+' 「'+esc(b.name)+'」が押されたら</div><div class="step-block-content">ステータス → 「'+esc(b.status||b.name)+'」'+(b.threadReply?'<br>📝 返信: '+esc((b.replyMsg||'').substring(0,50)):'<br><span style="color:#bbb">ステータス変更のみ</span>')+'</div></div>';if(i<bl2.length-1)fh+='<div class="step-arrow">↓</div>';});fh+='<div class="step-arrow">↓</div><div class="step-block"><div class="step-block-title">✅ 完了</div><div class="step-block-content">カードが更新されボタンが消えます</div></div>';fe.innerHTML=fh;}
+}
+
+/* ============================================================
+   Field Modal
+   ============================================================ */
+function addField(){showFieldModal(-1)}
+function editField(i){showFieldModal(i)}
+function removeField(i){currentFields.splice(i,1);markDirty();document.getElementById('fieldList').innerHTML=renderFields();initSortable();updatePreview();hideError('errFields');}
+function showFieldModal(idx){
+  var f=idx>=0?currentFields[idx]:{name:'',type:'text',options:'',required:false};
+  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  ov.innerHTML='<div class="modal"><h3>'+(idx>=0?'項目の編集':'項目の追加')+'</h3><div class="form-group"><label>項目名</label><input type="text" id="fName" value="'+esc(f.name)+'"><div class="error-msg" id="errFName">項目名を入力してください</div></div><div class="form-group"><label>入力タイプ</label><select id="fType" onchange="toggleOpts()"><option value="text"'+(f.type==='text'?' selected':'')+'>テキスト（1行）</option><option value="textarea"'+(f.type==='textarea'?' selected':'')+'>テキスト（複数行）</option><option value="dropdown"'+(f.type==='dropdown'?' selected':'')+'>プルダウン</option><option value="checkbox"'+(f.type==='checkbox'?' selected':'')+'>チェックボックス</option><option value="date"'+(f.type==='date'?' selected':'')+'>日付</option></select></div><div class="form-group" id="optsG" style="'+((f.type==='dropdown'||f.type==='checkbox')?'':'display:none')+'"><label>選択肢（カンマ区切り）</label><input type="text" id="fOpts" value="'+esc(f.options)+'"></div><div class="form-group"><div class="checkbox-row"><input type="checkbox" id="fReq"'+(f.required?' checked':'')+'><label for="fReq">必須項目にする</label></div></div><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveField('+idx+')">保存</button></div></div>';
+  document.body.appendChild(ov);
+}
+function toggleOpts(){document.getElementById('optsG').style.display=(document.getElementById('fType').value==='dropdown'||document.getElementById('fType').value==='checkbox')?'':'none';}
+function saveField(idx){
+  var n=document.getElementById('fName').value.trim();
+  if(!n){showError('errFName');return;}
+  hideError('errFName');
+  var f={name:n,type:document.getElementById('fType').value,options:document.getElementById('fOpts')?document.getElementById('fOpts').value:'',required:document.getElementById('fReq').checked,order:idx>=0?currentFields[idx].order:currentFields.length+1};
+  if(idx>=0)currentFields[idx]=f;else currentFields.push(f);
+  markDirty();document.querySelector('.modal-overlay').remove();document.getElementById('fieldList').innerHTML=renderFields();initSortable();updatePreview();hideError('errFields');
+}
+
+/* ============================================================
+   Button Modal
+   ============================================================ */
+function addButton(){showButtonModal(-1)}
+function editButton(i){showButtonModal(i)}
+function removeButton(i){currentButtons.splice(i,1);markDirty();document.getElementById('btnList').innerHTML=renderButtons();initSortable();updatePreview();}
+function showButtonModal(idx){
+  var b=idx>=0?currentButtons[idx]:{name:'',status:'',color:'green',threadReply:false,replyMsg:''};
+  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  ov.innerHTML='<div class="modal"><h3>'+(idx>=0?'ボタンの編集':'ボタンの追加')+'</h3><div class="form-row"><div class="form-group"><label>ボタン名</label><input type="text" id="bName" value="'+esc(b.name)+'" placeholder="承認"><div class="error-msg" id="errBName">ボタン名を入力してください</div></div><div class="form-group"><label>ステータス値</label><input type="text" id="bStatus" value="'+esc(b.status)+'" placeholder="承認"><div class="error-msg" id="errBStatus">ステータス値を入力してください</div></div></div><div class="form-group"><label>色</label><div class="color-palette">'+Object.keys(COLORS).map(function(k){return '<div class="color-dot'+(b.color===k?' selected':'')+'" style="background:'+COLORS[k]+'" onclick="selColor(this,\''+k+'\')"></div>';}).join('')+'</div><input type="hidden" id="bColor" value="'+esc(b.color)+'"></div><div class="action-section"><div class="checkbox-row"><input type="checkbox" id="bThread"'+(b.threadReply?' checked':'')+' onchange="toggleBT()"><label for="bThread">スレッドに返信する</label></div><div id="bTMsg" style="'+(b.threadReply?'':'display:none')+';margin-top:8px"><input type="text" id="bReplyMsg" value="'+esc(b.replyMsg)+'" placeholder="{申請者}の申請が{ステータス}されました" style="font-size:12px"></div></div><div style="margin-top:6px;font-size:10px;color:var(--c-text-faint)">変数: {申請者} {ステータス} {ワークフロー}</div><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveButton('+idx+')">保存</button></div></div>';
+  document.body.appendChild(ov);
+}
+function selColor(el,c){document.querySelectorAll('.color-dot').forEach(function(d){d.classList.remove('selected')});el.classList.add('selected');document.getElementById('bColor').value=c;}
+function toggleBT(){document.getElementById('bTMsg').style.display=document.getElementById('bThread').checked?'':'none';}
+function saveButton(idx){
+  var n=document.getElementById('bName').value.trim(),s=document.getElementById('bStatus').value.trim();
+  var ok=true;
+  if(!n){showError('errBName');ok=false;}else hideError('errBName');
+  if(!s){showError('errBStatus');ok=false;}else hideError('errBStatus');
+  if(!ok)return;
+  var b={name:n,status:s,color:document.getElementById('bColor').value,threadReply:document.getElementById('bThread').checked,replyMsg:document.getElementById('bReplyMsg')?document.getElementById('bReplyMsg').value:'',order:idx>=0?currentButtons[idx].order:currentButtons.length+1};
+  if(idx>=0)currentButtons[idx]=b;else currentButtons.push(b);
+  markDirty();document.querySelector('.modal-overlay').remove();document.getElementById('btnList').innerHTML=renderButtons();initSortable();updatePreview();
+}
+
+/* ============================================================
+   Save / Delete / Deploy
+   ============================================================ */
+function save(){
+  var errBasic=false,errFieldsSec=false;
+  if(!val('wfName')){showError('errName');errBasic=true;}else hideError('errName');
+  if(!val('wfExecSpace')){showError('errExec');errBasic=true;}else hideError('errExec');
+  if(!val('wfTargetSpace')){showError('errTarget');errBasic=true;}else hideError('errTarget');
+  if(!currentFields.length){showError('errFields');errFieldsSec=true;}else hideError('errFields');
+  var dBasic=document.getElementById('dotBasic'),dFields=document.getElementById('dotFields'),dNotify=document.getElementById('dotNotify');
+  if(dBasic)dBasic.style.display=errBasic?'':'none';
+  if(dFields)dFields.style.display=errFieldsSec?'':'none';
+  if(dNotify)dNotify.style.display='none';
+  if(errBasic||errFieldsSec){
+    if(errBasic)setWfTab('basic');else if(errFieldsSec)setWfTab('fields');
+    showToast('入力に不備があります');
+    return;
+  }
+  var data={id:currentWfId,name:val('wfName'),type:val('wfType'),execSpace:val('wfExecSpace'),targetSpace:val('wfTargetSpace'),
+    approvers:val('wfApprovers'),
+    approverUserIds:val('wfApproverUserIds'),
+    mentionText:val('wfMentionText')||'',
+    externalSheet:document.getElementById('wfExtCheck')&&document.getElementById('wfExtCheck').checked?val('wfExtSheet'):'',
+    fields:currentFields.map(function(f,i){return{name:f.name,type:f.type,options:f.options,required:f.required,order:i+1}}),
+    buttons:currentButtons.map(function(b,i){return{name:b.name,status:b.status,color:b.color,threadReply:b.threadReply,replyMsg:b.replyMsg,order:i+1}})};
+  showLoading('保存中...');
+  run('api_saveWorkflow',data,function(r){
+    if(r.error){showToast('エラー: '+r.error);return;}
+    isDirty=false;
+    var ex=workflows.findIndex(function(w){return w.id===r.id});
+    var nw={id:r.id,name:data.name,type:data.type,execSpace:data.execSpace,targetSpace:data.targetSpace,status:'有効',approvers:data.approvers||'',approverUserIds:data.approverUserIds||'',mentionText:data.mentionText||'',externalSheet:data.externalSheet||''};
+    if(ex>=0)workflows[ex]=nw;else workflows.push(nw);
+    currentWfId=r.id;showToast('保存しました');renderList();
+  });
+}
+/* ============================================================
+   Approver Picker Modal - 送信先スペースのメンバーから承認者選択
+   ============================================================ */
+function openApproverPicker(){
+  var ts=val('wfTargetSpace');
+  if(!ts){showToast('先に送信先スペースを選択してください');return;}
+  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  ov.innerHTML='<div class="modal" style="max-width:520px"><h3>メンバーから承認者を選択</h3>'
+    +'<p style="font-size:12px;color:var(--c-text-muted);margin:8px 0">送信先スペースのメンバーから選択できます。選択した相手には申請投稿時に @メンション通知が飛びます。</p>'
+    +'<div style="margin:8px 0"><input type="text" id="apkSearch" placeholder="名前で絞り込み" oninput="filterApproverPicker()" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px"></div>'
+    +'<div id="apkList" style="max-height:340px;overflow:auto;border:1px solid var(--c-border);border-radius:8px;padding:6px"><div class="empty" style="padding:20px">読み込み中...</div></div>'
+    +'<div style="font-size:11px;color:var(--c-text-muted);margin-top:6px"><span id="apkCount">0名選択中</span></div>'
+    +'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="applyApproverPicker()">決定</button></div></div>';
+  document.body.appendChild(ov);
+  showLoading('メンバー取得中...');
+  google.script.run.withSuccessHandler(function(members){
+    hideLoading();
+    if(!members||!members.length){document.getElementById('apkList').innerHTML='<div class="empty" style="padding:20px">メンバーが取得できませんでした。Bot が対象スペースに参加していない可能性があります。一度ワークフローを保存して「設置」ボタンを押してから再度お試しください。</div>';return;}
+    var currentIds=(val('wfApproverUserIds')||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+    window.__apkMembers=members;
+    renderApproverPicker(currentIds);
+  }).withFailureHandler(function(e){hideLoading();document.getElementById('apkList').innerHTML='<div class="empty" style="padding:20px;color:var(--c-danger)">エラー: '+esc(e.message)+'</div>';}).api_getSpaceMembers(ts);
+}
+function renderApproverPicker(preselectedIds){
+  var members=window.__apkMembers||[];
+  var q=(document.getElementById('apkSearch').value||'').toLowerCase();
+  var filtered=q?members.filter(function(m){return (m.displayName||'').toLowerCase().indexOf(q)>=0||(m.email||'').toLowerCase().indexOf(q)>=0;}):members;
+  var html=filtered.map(function(m){
+    var checked=preselectedIds.indexOf(m.userId)>=0?' checked':'';
+    return '<label style="display:flex;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer" onmouseover="this.style.background=\'var(--c-hover)\'" onmouseout="this.style.background=\'\'"><input type="checkbox" class="apkCbx" data-uid="'+esc(m.userId)+'" data-email="'+esc(m.email||'')+'" onchange="updateApkCount()"'+checked+' style="margin-right:10px"><span style="flex:1"><b>'+esc(m.displayName||'(名前不明)')+'</b>'+(m.email?'<span style="font-size:11px;color:var(--c-text-muted);margin-left:8px">'+esc(m.email)+'</span>':'<span style="font-size:11px;color:var(--c-danger);margin-left:8px">メール未取得</span>')+'</span></label>';
+  }).join('');
+  document.getElementById('apkList').innerHTML=html||'<div class="empty" style="padding:20px">該当メンバーなし</div>';
+  updateApkCount();
+}
+function filterApproverPicker(){
+  var currentSelection=[].slice.call(document.querySelectorAll('.apkCbx:checked')).map(function(cb){return cb.getAttribute('data-uid');});
+  renderApproverPicker(currentSelection);
+}
+function updateApkCount(){
+  var n=document.querySelectorAll('.apkCbx:checked').length;
+  var c=document.getElementById('apkCount');if(c)c.textContent=n+'名選択中';
+}
+function applyApproverPicker(){
+  var selected=[].slice.call(document.querySelectorAll('.apkCbx:checked'));
+  var emails=selected.map(function(cb){return cb.getAttribute('data-email');}).filter(function(e){return e;});
+  var uids=selected.map(function(cb){return cb.getAttribute('data-uid');}).filter(function(u){return u;});
+  document.getElementById('wfApprovers').value=emails.join(', ');
+  document.getElementById('wfApproverUserIds').value=uids.join(',');
+  var h=document.getElementById('wfApproverIdsHint');
+  if(h)h.innerHTML=uids.length?'✅ '+uids.length+'名にメンション通知が飛びます':'※メンバーから選択すると承認時に @メンション通知が飛びます';
+  markDirty();
+  document.querySelector('.modal-overlay').remove();
+  showToast(uids.length+'名を承認者に設定しました');
+}
+
+function deleteWf(){
+  var wf=workflows.find(function(w){return w.id===currentWfId});if(!wf)return;
+  var ov=mk('modal-overlay');
+  ov.innerHTML='<div class="modal"><h3>アーカイブの確認</h3><p style="margin:12px 0;color:var(--c-text-sub)">「'+esc(wf.name)+'」をアーカイブしますか？<br><span style="font-size:12px;color:var(--c-text-muted)">30日以内なら「アーカイブ」から復元できます。30日経過後に完全削除されます。</span></p><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-danger" onclick="confirmDelete()">アーカイブ</button></div></div>';
+  document.body.appendChild(ov);
+}
+function confirmDelete(){
+  document.querySelector('.modal-overlay').remove();var did=currentWfId;
+  showLoading('アーカイブ中...');
+  google.script.run.withSuccessHandler(function(){hideLoading();isDirty=false;workflows=workflows.filter(function(w){return w.id!==did});currentWfId=null;showToast('アーカイブしました');renderList();document.getElementById('mainArea').innerHTML='<div class="empty"><span class="mi" style="font-size:56px;color:var(--c-text-faint)">assignment</span><p>ワークフローを選択してください</p></div>';}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_deleteWorkflow(did);
+}
+function showArchive(){
+  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  ov.innerHTML='<div class="modal"><h3>アーカイブ</h3><p style="font-size:12px;color:var(--c-text-muted);margin-bottom:12px">30日以内のアーカイブは復元できます。30日経過後に完全削除されます。</p><div id="archiveList" style="max-height:400px;overflow:auto"><div class="empty" style="padding:20px">読み込み中...</div></div><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">閉じる</button></div></div>';
+  document.body.appendChild(ov);
+  google.script.run.withSuccessHandler(function(list){
+    var el=document.getElementById('archiveList');if(!el)return;
+    if(!list||!list.length){el.innerHTML='<div class="empty" style="padding:20px;font-size:13px">アーカイブされたワークフローはありません</div>';return;}
+    el.innerHTML=list.map(function(a){var d=a.archivedAt?new Date(a.archivedAt).toLocaleDateString('ja-JP'):'';return '<div class="admin-item"><div><div>'+esc(a.name)+'</div><div style="font-size:11px;color:var(--c-text-muted)">'+esc(a.type)+' · アーカイブ: '+d+'</div></div><div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="restoreArchive('+a.id+')">復元</button><button class="btn btn-sm" style="color:var(--c-danger);border-color:var(--c-danger)" onclick="purgeArchive('+a.id+',\''+esc(a.name).replace(/\x27/g,'\\\x27')+'\')">完全削除</button></div></div>';}).join('');
+  }).withFailureHandler(function(e){var el=document.getElementById('archiveList');if(el)el.innerHTML='<div style="padding:20px;color:var(--c-danger)">エラー: '+esc(e.message)+'</div>';}).api_getArchivedWorkflows();
+}
+function restoreArchive(id){
+  showLoading('復元中...');
+  google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){showToast('復元しました('+r.name+')');document.querySelector('.modal-overlay').remove();google.script.run.withSuccessHandler(function(list){workflows=list||[];renderList();}).api_getWorkflows();}else{showToast('エラー: '+(r.error||''));}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_restoreWorkflow(id);
+}
+function purgeArchive(id,name){
+  if(!confirm('「'+name+'」を完全に削除します。この操作は取り消せません。データシートも削除されます。よろしいですか？'))return;
+  showLoading('完全削除中...');
+  google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){showToast('完全削除しました('+(r.name||name)+')');document.querySelector('.modal-overlay').remove();showArchive();}else{showToast('エラー: '+(r.error||''));}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_purgeWorkflow(id);
+}
+function deployButton(){
+  if(!currentWfId)return;
+  showLoading('設置中...');
+  run('api_deployButton',currentWfId,function(r){showToast(r.success?'設置しました':'エラー: '+(r.error||''));});
+}
+function cancel(){
+  if(isDirty&&!confirm('未保存の変更があります。破棄しますか？'))return;
+  isDirty=false;currentWfId=null;
+  document.getElementById('mainArea').innerHTML='<div class="empty"><span class="mi" style="font-size:56px;color:var(--c-text-faint)">assignment</span><p>ワークフローを選択してください</p></div>';
+}
+
+/* ============================================================
+   Admin Management
+   ============================================================ */
+function openMasterSheet(){window.open('https://docs.google.com/spreadsheets/d/1iHLqkdJyCZUP6eivZiMovZvt6kbrWnzTDsTV2O5GUS8','_blank');}
+function showAdmins(){
+  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  ov.innerHTML='<div class="modal"><h3>管理者設定</h3><p style="font-size:12px;color:var(--c-text-muted);margin-bottom:12px">管理画面にアクセスできるユーザーを管理します。</p><div id="adminList">'+renderAdminList()+'</div><div class="form-row" style="margin-top:12px"><div class="form-group" style="flex:1;margin:0"><input type="text" id="newAdmin" placeholder="メールアドレスを入力"></div><div><button class="btn btn-primary btn-sm" onclick="addAdmin()" style="height:38px">追加</button></div></div><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">閉じる</button><button class="btn btn-primary" onclick="saveAdmins()">保存</button></div></div>';
+  document.body.appendChild(ov);
+}
+function renderAdminList(){return admins.map(function(a,i){return '<div class="admin-item">'+esc(a)+(a.toLowerCase()===currentUser.toLowerCase()?'<span style="font-size:11px;color:var(--c-text-muted)">（あなた）</span>':'<button class="btn btn-sm btn-danger" onclick="removeAdmin('+i+')">✕</button>')+'</div>';}).join('');}
+function addAdmin(){var e=document.getElementById('newAdmin').value.trim();if(!e||!e.includes('@'))return;if(admins.indexOf(e)===-1)admins.push(e);document.getElementById('newAdmin').value='';document.getElementById('adminList').innerHTML=renderAdminList();}
+function removeAdmin(i){admins.splice(i,1);document.getElementById('adminList').innerHTML=renderAdminList();}
+function saveAdmins(){showLoading('保存中...');google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){showToast('管理者を保存しました');document.querySelector('.modal-overlay').remove();}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_saveAdmins(admins);}
+
+/* ============================================================
+   Help
+   ============================================================ */
+function showHelp(){
+  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  ov.innerHTML=''
+    +'<div class="modal help-modal">'
+    +'<h3>ご利用ガイド</h3>'
+    +'<div class="help-tabs">'
+    +'<button class="help-tab active" data-pane="overview">はじめに</button>'
+    +'<button class="help-tab" data-pane="create">作成する</button>'
+    +'<button class="help-tab" data-pane="deploy">配置する</button>'
+    +'<button class="help-tab" data-pane="apply">申請する</button>'
+    +'<button class="help-tab" data-pane="approve">承認する</button>'
+    +'<button class="help-tab" data-pane="manage">管理・運用</button>'
+    +'<button class="help-tab" data-pane="trouble">困ったとき</button>'
+    +'</div>'
+    +'<div class="help-section">'
+
+    +'<div class="help-pane active" data-pane="overview">'
+    +'<h4><span class="mi">info</span>このツールでできること</h4>'
+    +'<p>このツールは、Google Chat 上で「申請」や「記録」を簡単に行えるようにするための仕組みです。従来メールやチャットで口頭でやり取りしていた申請・承認の流れを、ボタンひとつで開始でき、結果はすべてスプレッドシートに自動保存されます。</p>'
+    +'<h5>2つの種類</h5>'
+    +'<table><tr><th>種類</th><th>用途</th><th>例</th></tr>'
+    +'<tr><td>申請・承認</td><td>誰かの承認を必要とする手続き</td><td>有給申請、経費精算、備品購入</td></tr>'
+    +'<tr><td>定型文送信</td><td>承認は不要で内容を残したい報告</td><td>日報、来客記録、業務連絡</td></tr></table>'
+    +'<h5>登場人物</h5>'
+    +'<ul>'
+    +'<li><b>管理者</b>：この管理画面を使ってワークフロー(申請の型)を作成・配置する人</li>'
+    +'<li><b>申請者</b>：Google Chat 上でボタンを押して申請を出す人</li>'
+    +'<li><b>承認者</b>：届いた申請を承認・却下する人(申請・承認型のみ)</li>'
+    +'</ul>'
+    +'<div class="help-note">初めての方は、まず「作成する」タブの手順に沿って、テスト用のワークフローをひとつ作ってみることをおすすめします。</div>'
+    +'</div>'
+
+    +'<div class="help-pane" data-pane="create">'
+    +'<h4><span class="mi">edit_note</span>ワークフローを作る手順</h4>'
+    +'<p>「ワークフロー」とは、申請の入力項目やボタンをまとめた「型」のことです。編集画面は 3 つのチップ(タブ)に分かれており、上部の <b>①基本情報 / ②フォーム項目 / ③承認・通知</b> をクリックしてセクションを切り替えます。順番通りでなくても入力できます。</p>'
+    +'<h5>はじめに:新規作成</h5>'
+    +'<ol>'
+    +'<li>左側サイドバーの「新規」ボタンをクリックします。</li>'
+    +'<li>右側に入力フォームが表示されます。上部にチップナビ(基本情報 / フォーム項目 / 承認・通知)が並びます。</li>'
+    +'</ol>'
+    +'<h5>①基本情報</h5>'
+    +'<ul>'
+    +'<li><b>ワークフロー名</b>:一目でわかる名前をつけてください(例:「有給休暇申請」)。この名前はスプレッドシートのシート名にもなります。</li>'
+    +'<li><b>種類</b>:「申請・承認」か「定型文送信」を選びます。「定型文送信」を選ぶとチップ③は「通知設定」に変わり、承認者/ボタン設定が非表示になります。</li>'
+    +'<li><b>実行スペース</b>:申請ボタンを設置する Google Chat のスペースを選びます。</li>'
+    +'<li><b>送信先スペース</b>:申請内容の通知を届けたい Google Chat のスペースを選びます。承認者が参加しているスペースを指定してください(同じスペースを両方に選んでも構いません)。</li>'
+    +'</ul>'
+    +'<h5>②フォーム項目</h5>'
+    +'<p>申請者が入力する項目を、必要な数だけ追加します。「＋ 項目を追加」で追加でき、以下の種類から選べます。</p>'
+    +'<table><tr><th>種類</th><th>用途の例</th></tr>'
+    +'<tr><td>テキスト(1行)</td><td>氏名、金額、簡単な理由</td></tr>'
+    +'<tr><td>テキスト(複数行)</td><td>詳細な説明文、備考</td></tr>'
+    +'<tr><td>プルダウン</td><td>いくつかの選択肢から1つ選ぶ(例:休暇の種類)</td></tr>'
+    +'<tr><td>チェックボックス</td><td>複数の選択肢から複数選ぶ(例:参加希望日)</td></tr>'
+    +'<tr><td>日付</td><td>日付を1つ選ぶ(例:休暇取得日)</td></tr></table>'
+    +'<p>プルダウン・チェックボックスは、選択肢を「,」(カンマ)区切りで入力してください。項目名の右にある「必須」にチェックを入れると、入力しないと送信できない項目になります。</p>'
+    +'<div class="help-note">必須項目が空のまま「送信」を押した場合、Chat のダイアログは閉じずに入力内容を保持したまま先頭に赤字で警告が表示されます。項目を埋めて再度「送信」してください。</div>'
+    +'<h5>③承認・通知(申請・承認型)</h5>'
+    +'<p>承認者・メンション文言・アクションボタン・外部シート連携をまとめて設定します。</p>'
+    +'<ul>'
+    +'<li><b>承認者</b>:「メンバーから選択」ボタンで送信先スペースの参加者一覧からピッカーで選べます(表示名で検索可)。メールを直接カンマ区切りで入力することも可能。空欄にすると送信先スペース参加者全員が承認できます。</li>'
+    +'<li><b>@メンション通知</b>:承認者を「メンバーから選択」で指定した場合、承認カード投稿時にその承認者へ Google Chat の @メンション通知が飛びます(メール手入力だけでは通知は飛びません)。</li>'
+    +'<li><b>メンション文言</b>:@メンションに続く文言をカスタマイズできます。空欄の場合は「承認をお願いします」。変数 <code>{申請者}</code> と <code>{ワークフロー}</code> が使えます(例:「{申請者} からの申請です。ご確認ください」)。</li>'
+    +'<li><b>アクションボタン</b>:デフォルトの「承認」「却下」以外にも自由に追加/変更できます。</li>'
+    +'<ul>'
+    +'<li>ボタン名:表示される文言(例:「承認する」「差し戻す」)</li>'
+    +'<li>ステータス値:スプレッドシートに記録される文字列(例:「承認」「差戻し」)</li>'
+    +'<li>色:緑・青・黄・オレンジ・赤・グレー</li>'
+    +'<li>スレッド返信:オンにすると承認結果を承認カードのスレッドに自動投稿</li>'
+    +'</ul>'
+    +'<li><b>外部スプレッドシート連携</b>:別のスプレッドシートにも同時に書き込みたい場合、URL を入力してください。</li>'
+    +'</ul>'
+    +'<h5>保存</h5>'
+    +'<p>すべてのセクションを入力したら、右下の「保存」ボタンをクリックします。入力に不備があるとチップに赤丸バッジが付き、該当セクションへ自動で切り替わります。</p>'
+    +'<div class="help-note">保存の時点ではまだ Google Chat には反映されません。次の「配置する」タブに進んでください。</div>'
+    +'</div>'
+
+    +'<div class="help-pane" data-pane="deploy">'
+    +'<h4><span class="mi">rocket_launch</span>Google Chat に配置する</h4>'
+    +'<p>作成しただけでは Chat には表示されません。「配置」を行うことで、指定したスペースに申請ボタンが投稿されます。</p>'
+    +'<h5>手順</h5>'
+    +'<ol>'
+    +'<li>左のリストから配置したいワークフローを選択します。</li>'
+    +'<li>右上の「配置」ボタンをクリックします。</li>'
+    +'<li>実行スペースにボタンカードが自動で投稿されます。</li>'
+    +'</ol>'
+    +'<h5>再配置について</h5>'
+    +'<p>設定を変更した後にもう一度「配置」を押すと、古いカードは自動的に削除され、新しいカードに置き換わります。ボタンの見た目や項目を変更した際は再配置してください。</p>'
+    +'<h5>スペースへの Bot 招待</h5>'
+    +'<p>初めてそのスペースに配置する際、Bot(Workflow Bot)が自動でスペースに参加します。参加できない場合は、スペースの管理者に確認してください。</p>'
+    +'<h5>有効/無効の切り替え</h5>'
+    +'<p>リストの各ワークフローのトグルで、一時的に無効化できます。無効にしたワークフローは Chat の /apply コマンドで表示されなくなりますが、既に配置済みのボタンカードは残ります(押しても動作しません)。</p>'
+    +'</div>'
+
+    +'<div class="help-pane" data-pane="apply">'
+    +'<h4><span class="mi">how_to_reg</span>申請者の使い方(参考)</h4>'
+    +'<p>この項目は、Chat で実際に申請を出す社員が行う操作の説明です。マニュアルとして配布する際にご参照ください。</p>'
+    +'<h5>方法 1:ボタンから申請する</h5>'
+    +'<ol>'
+    +'<li>指定された Google Chat のスペースを開きます。</li>'
+    +'<li>「申請する」または「送信する」と書かれたボタンを探します。</li>'
+    +'<li>ボタンを押すと、入力ダイアログが開きます。</li>'
+    +'<li>必要な項目を入力します(「*」がついている項目は必須です)。</li>'
+    +'<li>「送信」ボタンを押します。</li>'
+    +'</ol>'
+    +'<h5>方法 2:コマンドから申請する</h5>'
+    +'<ol>'
+    +'<li>Chat のメッセージ入力欄に「/apply」と入力します。</li>'
+    +'<li>そのスペースで利用できるワークフロー一覧が表示されるので、目的のものを選びます。</li>'
+    +'<li>あとはボタン操作と同じです。</li>'
+    +'</ol>'
+    +'<h5>送信後の流れ</h5>'
+    +'<ul>'
+    +'<li><b>申請・承認型</b>:送信先スペースに承認カードが届き、承認者が処理します。結果が確定するとカードが更新され、状況が確認できます。</li>'
+    +'<li><b>定型文送信型</b>:送信先スペースに投稿されて完了です。承認プロセスはありません。</li>'
+    +'</ul>'
+    +'</div>'
+
+    +'<div class="help-pane" data-pane="approve">'
+    +'<h4><span class="mi">verified</span>承認者の使い方(参考)</h4>'
+    +'<p>申請が届いた際に承認・却下を行う社員向けの操作説明です。</p>'
+    +'<h5>手順</h5>'
+    +'<ol>'
+    +'<li>送信先スペースに「新しい申請」というカードが届きます。</li>'
+    +'<li>カード内の項目を確認します(申請者名・入力内容・ステータス)。</li>'
+    +'<li>下部のボタン(「承認」「却下」など、ワークフロー定義によって異なります)を押します。</li>'
+    +'<li>ブラウザで結果画面が開き、処理が完了します。</li>'
+    +'<li>Chat に戻ると、カードのステータスが更新されています。</li>'
+    +'</ol>'
+    +'<div class="help-warn">承認用のリンクには有効期限があります(発行から30日)。期限を過ぎた場合は、申請者に再申請を依頼してください。</div>'
+    +'<h5>権限がない場合</h5>'
+    +'<p>承認者として指定されていないユーザーがボタンを押すと、「権限がありません」と表示されます。承認者リストに追加が必要な場合は、管理画面で該当ワークフローを編集し、「承認者」欄にメールを追加してください。</p>'
+    +'<h5>二重処理の防止</h5>'
+    +'<p>2人が同時に承認ボタンを押した場合、先に処理された内容が有効になります。後から押した側には「処理済み」と表示されます。</p>'
+    +'</div>'
+
+    +'<div class="help-pane" data-pane="manage">'
+    +'<h4><span class="mi">shield_person</span>管理者を追加する</h4>'
+    +'<p>この管理画面にアクセスできるユーザーを設定します。</p>'
+    +'<ol>'
+    +'<li>左下の「管理者」ボタンをクリックします。</li>'
+    +'<li>メールアドレスを入力して「追加」を押します。</li>'
+    +'<li>不要になったユーザーは「×」で削除できます。</li>'
+    +'<li>「保存」ボタンで確定します。</li>'
+    +'</ol>'
+    +'<div class="help-warn">自分自身を削除して保存すると、以降ログインできなくなります。必ず信頼できる別の管理者を残してから編集してください。</div>'
+
+    +'<h4><span class="mi">table_view</span>データの保存場所</h4>'
+    +'<p>すべての申請内容・承認履歴はスプレッドシートに保存されます。「管理データ」ボタンから直接開くことができます。</p>'
+    +'<h5>シートの構成</h5>'
+    +'<table><tr><th>シート名</th><th>内容</th></tr>'
+    +'<tr><td>_設定</td><td>ワークフローの一覧と設定</td></tr>'
+    +'<tr><td>_項目設定</td><td>各ワークフローの入力項目</td></tr>'
+    +'<tr><td>_ボタン設定</td><td>各ワークフローの承認ボタン</td></tr>'
+    +'<tr><td>_管理者</td><td>管理画面にアクセスできるユーザー</td></tr>'
+    +'<tr><td>_監査ログ</td><td>誰がいつ何をしたかの履歴(自動記録)</td></tr>'
+    +'<tr><td>(ワークフロー名)</td><td>そのワークフローの申請データ</td></tr></table>'
+    +'<div class="help-warn">「_」で始まるシートはシステム用です。直接編集すると動作に影響が出ますので、内容確認のみに使用してください。</div>'
+
+    +'<h4><span class="mi">description</span>外部スプレッドシートとの連携</h4>'
+    +'<p>各部署が既に利用しているスプレッドシートに、申請データを自動で書き込むことができます。ワークフロー作成画面の「外部スプレッドシート」欄に、対象スプレッドシートの URL を入力してください。</p>'
+    +'<ul>'
+    +'<li>ワークフロー名と同じシートが外部スプレッドシートに自動作成されます。</li>'
+    +'<li>マスタと外部の両方に同じデータが書き込まれます。</li>'
+    +'<li>Bot(Workflow Bot の実行アカウント)に、外部スプレッドシートの編集権限が必要です。</li>'
+    +'</ul>'
+    +'</div>'
+
+    +'<div class="help-pane" data-pane="trouble">'
+    +'<h4><span class="mi">quiz</span>よくある質問</h4>'
+
+    +'<h5>Q. 管理画面にログインできません</h5>'
+    +'<p>以下を順にご確認ください。</p>'
+    +'<ol>'
+    +'<li>ログインしている Google アカウントが会社のアカウントであること。</li>'
+    +'<li>「管理者」に自分のメールアドレスが登録されていること(既に管理者の方に確認を依頼してください)。</li>'
+    +'<li>登録メールアドレスの前後に、余分な空白(特に全角スペース)が入っていないこと。</li>'
+    +'</ol>'
+
+    +'<h5>Q. /apply を押しても何も表示されません</h5>'
+    +'<p>そのスペースに紐づいたワークフローが存在しないか、すべて無効になっている可能性があります。管理画面で「実行スペース」がそのスペースに設定されているワークフローがあるか、有効になっているかをご確認ください。</p>'
+
+    +'<h5>Q. 「同じ名前のワークフローが既に存在します」と表示されます</h5>'
+    +'<p>別のワークフローで同名がすでに使われています。名前を変更するか、既存のものを削除してから再度お試しください。</p>'
+
+    +'<h5>Q. ワークフロー名に使えない文字は何ですか</h5>'
+    +'<p>スプレッドシートのシート名として使えない文字(/ \\ ? * [ ] :)は使用できません。また、80文字以内でご入力ください。</p>'
+
+    +'<h5>Q. 承認ボタンを押すと「無効なリクエスト」と表示されます</h5>'
+    +'<p>承認用のリンクは発行から30日で失効します。<b>対処:</b> 申請者に再申請を依頼してください。</p>'
+
+    +'<h5>Q. 承認者に指定したのに「権限がありません」と出ます</h5>'
+    +'<p><b>対処:</b> ワークフロー編集画面の「承認者」欄で、大文字・小文字の相違ではなく余分な空白が入っていないかご確認ください。管理者に確認を依頼する場合は下部の「問い合わせ」からご連絡ください。</p>'
+
+    +'<h5>Q. 「混雑中」「他の管理操作が進行中です」と表示されます</h5>'
+    +'<p>複数人が同時に同じ操作を行うと表示されます。<b>対処:</b> 10 秒ほど待ってから、もう一度同じ操作をお試しください。</p>'
+
+    +'<h5>Q. 「エラーが発生しました。管理者に連絡してください」と表示されます</h5>'
+    +'<p>予期せぬエラーです。<b>対処:</b> ページ下部の「問い合わせ」から、以下の情報を添えてご連絡ください:(1) 発生日時、(2) 操作内容、(3) 表示されたメッセージ全文、可能ならスクリーンショット。管理者側にも自動通知が届いています。</p>'
+
+    +'<h5>Q. ワークフローを削除してしまいました。復元できますか</h5>'
+    +'<p>アーカイブから 30 日以内であれば復元できます。<b>対処:</b> 左下の「アーカイブ」ボタンから対象を選び「復元」を押してください。30 日を過ぎると自動で完全削除されます。バックアップから復元する必要がある場合は管理者にご連絡ください。</p>'
+
+    +'<h5>Q. 同じ名前でワークフローを作り直したいが「既に存在します」と出る</h5>'
+    +'<p>同名のワークフローがアーカイブに残っています。<b>対処:</b> 左下の「アーカイブ」ボタンを開き、該当ワークフローの「完全削除」ボタンを押してから、新しいワークフローを作成してください。完全削除は取り消せませんのでご注意ください。</p>'
+
+    +'<h5>Q. データを削除したい</h5>'
+    +'<p>個別データの削除は「管理データ」からスプレッドシートを直接開いて操作してください。ワークフローごと削除する場合は、左リストの該当ワークフローを選択して「削除」ボタンを押してください(アーカイブ経由で 30 日以内は復元可能、以降は自動削除。すぐ完全削除したい場合はアーカイブ内の「完全削除」ボタンで即時削除できます)。</p>'
+
+    +'<h5>Q. Bot がスペースに参加していないと言われました</h5>'
+    +'<p>スペースの参加者一覧を確認し、「Workflow Bot」が含まれているかご確認ください。含まれていない場合は、スペースの設定から追加していただくか、管理画面から再度「配置」を実行すると自動で追加されます。</p>'
+
+    +'<h5>Q. それでも解決しない場合</h5>'
+    +'<p>本画面下部の「問い合わせ」リンクから、システム管理者までご連絡ください。その際、以下の情報を添えていただけると調査がスムーズです。</p>'
+    +'<ul>'
+    +'<li>発生した日時</li>'
+    +'<li>操作した内容(できればスクリーンショット)</li>'
+    +'<li>ワークフロー名</li>'
+    +'<li>表示されたエラーメッセージ</li>'
+    +'</ul>'
+    +'</div>'
+
+    +'</div>'
+    +'<div class="actions"><button class="btn btn-primary" onclick="this.closest(\'.modal-overlay\').remove()">閉じる</button></div>'
+    +'</div>';
+  document.body.appendChild(ov);
+  // タブ切り替え
+  var tabs = ov.querySelectorAll('.help-tab');
+  var panes = ov.querySelectorAll('.help-pane');
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){
+      var name = t.getAttribute('data-pane');
+      tabs.forEach(function(x){ x.classList.toggle('active', x === t); });
+      panes.forEach(function(p){ p.classList.toggle('active', p.getAttribute('data-pane') === name); });
+      var modal = ov.querySelector('.modal');
+      if (modal) modal.scrollTop = 0;
+    });
+  });
+}
+
+/* ============================================================
+   Utilities
+   ============================================================ */
+function run(fn,arg,onSuccess){
+  showLoading('処理中...');
+  google.script.run
+    .withSuccessHandler(function(r){hideLoading();if(onSuccess)onSuccess(r);})
+    .withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);})[fn](arg);
+}
+function val(id){var el=document.getElementById(id);return el?el.value.trim():'';}
+function showError(id){var el=document.getElementById(id);if(el){el.classList.add('show');var inp=el.previousElementSibling;if(inp)inp.classList.add('input-error');}}
+function hideError(id){var el=document.getElementById(id);if(el){el.classList.remove('show');var inp=el.previousElementSibling;if(inp)inp.classList.remove('input-error');}}
+function showLoading(msg){hideLoading();var d=mk('loading-toast');d.id='loadingToast';d.innerHTML='<div class="spinner"></div>'+esc(msg||'処理中...');document.body.appendChild(d);}
+function hideLoading(){var el=document.getElementById('loadingToast');if(el)el.remove();}
+function mk(c){var d=document.createElement('div');d.className=c;return d;}
+function showToast(m){var t=mk('toast');t.textContent=m;document.body.appendChild(t);setTimeout(function(){t.remove()},2500);}
+function noop(){}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+</script>
