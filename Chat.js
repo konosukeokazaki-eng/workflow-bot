@@ -73,20 +73,34 @@ function handleSubmitWorkflow_(event) {
   var values = {}, errors = [];
   fields.forEach(function(f) { var v = getInputValue_(inputs, 'field_' + f.order); values[f.name] = v; if (f.required && !String(v).trim()) errors.push(f.name); });
   if (errors.length > 0) return buildWorkflowDialogCard_(workflowId, values, errors, 'update');
-  var headers = ['タイムスタンプ', '送信者', '送信者メール'];
-  fields.forEach(function(f) { headers.push(f.name); });
-  if (wf.type === '申請・承認') headers.push('ステータス');
-  headers.push('メッセージ名');
-  var row = [new Date(), senderName, senderEmail];
-  fields.forEach(function(f) { row.push(values[f.name]); });
-  if (wf.type === '申請・承認') row.push('承認待ち');
-  row.push('');
+  // データシートは fieldId → dataCol の対応で書き込む。列の追加/削除/並び替えに強い。
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   var dataSheet = ss.getSheetByName(wf.name);
-  if (!dataSheet) { dataSheet = ss.insertSheet(wf.name); dataSheet.appendRow(headers); }
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet(wf.name);
+    var initHeaders = ['タイムスタンプ', '送信者', '送信者メール'];
+    fields.forEach(function(f) { initHeaders.push(f.name); });
+    if (wf.type === '申請・承認') initHeaders.push('ステータス');
+    initHeaders.push('メッセージ名');
+    dataSheet.appendRow(initHeaders);
+  }
+  var lastCol = dataSheet.getLastColumn();
+  var headerRow = dataSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var row = new Array(lastCol);
+  for (var ci = 0; ci < lastCol; ci++) row[ci] = '';
+  row[0] = new Date(); row[1] = senderName; row[2] = senderEmail;
+  fields.forEach(function(f) {
+    var col = f.dataCol && f.dataCol > 0 ? f.dataCol : -1;
+    if (col > 0 && col <= lastCol) row[col - 1] = values[f.name];
+  });
+  var statusIdx = -1, msgIdx = -1;
+  for (var hi = 0; hi < headerRow.length; hi++) { if (headerRow[hi] === 'ステータス') statusIdx = hi; if (headerRow[hi] === 'メッセージ名') msgIdx = hi; }
+  if (wf.type === '申請・承認' && statusIdx >= 0) row[statusIdx] = '承認待ち';
+  if (msgIdx >= 0) row[msgIdx] = '';
   dataSheet.appendRow(row);
   var rowIndex = dataSheet.getLastRow();
-  writeToExternalSheet_(wf, { headers: headers, values: row.slice(0, -1) });
+  var headers = headerRow.slice();
+  writeToExternalSheet_(wf, { headers: headers, values: row.slice(0, msgIdx >= 0 ? msgIdx : row.length) });
   if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex);
   else sendInfoCard_(wf, fields, values, senderName);
   return { action: { navigations: [{ endNavigation: { action: 'CLOSE_DIALOG' } }], notification: { text: '✅ 送信しました（' + wf.name + '）' } } };

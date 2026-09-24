@@ -240,6 +240,12 @@ function api_getAdmins() {
   } catch (err) { recordDataError_('api_getAdmins', err); return []; }
 }
 
+// フィールドの追加/削除/改名/並び替えでデータシートの列がズレないよう、
+// fieldId ベースの差分検出でデータシートを最小限だけ変更する。
+// - 追加: メッセージ名の直前に列挿入 → dataCol を割り当て
+// - 削除: 論理削除(deleted=true)。データシート列は保持
+// - 改名: ヘッダー行の該当セルのみ更新
+// - 並び替え: データシート無変更。order 値のみ更新
 function api_saveWorkflow(data) {
   var lock = LockService.getScriptLock();
   try {
@@ -252,16 +258,15 @@ function api_saveWorkflow(data) {
     if (urlErr) return { success: false, error: urlErr };
     if (!lock.tryLock(30000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    ensureFieldSchema_(ss);
     var stSheet = ss.getSheetByName(SHEET_SETTINGS);
     var flSheet = ss.getSheetByName(SHEET_FIELDS);
     var btSheet = ss.getSheetByName(SHEET_BUTTONS);
-    // 13 列目(承認者Chat User ID) / 14 列目(メンション文言)ヘッダを初回だけ用意する
     if (stSheet.getLastColumn() < 13 || stSheet.getRange(1, 13).getValue() !== '承認者UserID') stSheet.getRange(1, 13).setValue('承認者UserID');
     if (stSheet.getLastColumn() < 14 || stSheet.getRange(1, 14).getValue() !== 'メンション文言') stSheet.getRange(1, 14).setValue('メンション文言');
     var approverUserIds = String(data.approverUserIds || '').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }).join(',');
     var mentionText = String(data.mentionText || '').trim();
     var isNew = !data.id, wid, oldName = '';
-    // 重複チェック(採番前に実施)。アーカイブ済み(status='archived')は無視する。
     var allRows = stSheet.getLastRow() >= 2 ? stSheet.getRange(2, 1, stSheet.getLastRow() - 1, 8).getValues() : [];
     for (var d = 0; d < allRows.length; d++) {
       if (allRows[d][1] === data.name && allRows[d][0] !== data.id && allRows[d][7] !== 'archived') {
@@ -277,38 +282,141 @@ function api_saveWorkflow(data) {
       var rows = stSheet.getRange(2, 1, stSheet.getLastRow() - 1, 11).getValues();
       for (var i = 0; i < rows.length; i++) { if (rows[i][0] === wid) { var rn = i + 2; oldName = rows[i][1]; stSheet.getRange(rn, 2).setValue(data.name); stSheet.getRange(rn, 3).setValue(data.type); stSheet.getRange(rn, 4).setValue(data.execSpace); stSheet.getRange(rn, 5).setValue(data.targetSpace); stSheet.getRange(rn, 10).setValue(data.approvers || ''); stSheet.getRange(rn, 11).setValue(data.externalSheet || ''); stSheet.getRange(rn, 13).setValue(approverUserIds); stSheet.getRange(rn, 14).setValue(mentionText); break; } }
     }
-    if (flSheet.getLastRow() >= 2) { var fd = flSheet.getRange(2, 1, flSheet.getLastRow() - 1, 6).getValues(); for (var j = fd.length - 1; j >= 0; j--) { if (fd[j][0] === wid) flSheet.deleteRow(j + 2); } }
-    if (data.fields) data.fields.forEach(function(f, idx) { flSheet.appendRow([wid, f.name, f.type, f.options || '', f.required || false, idx + 1]); });
-    if (btSheet.getLastRow() >= 2) { var bd = btSheet.getRange(2, 1, btSheet.getLastRow() - 1, 9).getValues(); for (var k = bd.length - 1; k >= 0; k--) { if (bd[k][0] === wid) btSheet.deleteRow(k + 2); } }
-    if (data.buttons) data.buttons.forEach(function(b, idx) { btSheet.appendRow([wid, b.name, b.status, b.color, idx + 1, b.threadReply || false, b.replyMsg || '', false, '']); });
+
+    // データシートを準備。新規シートは最小ヘッダー(ts/sender/email + status? + messageName)のみで作り、
+    // フィールド列は後続の diff.added で一貫して追加する(重複防止)。
     var sn = oldName || data.name;
     var ds = ss.getSheetByName(sn);
-    if (ds) {
-      if (oldName && oldName !== data.name) ds.setName(data.name);
-      var nh = ['タイムスタンプ', '送信者', '送信者メール'];
-      if (data.fields) data.fields.forEach(function(f) { nh.push(f.name); });
-      if (data.type === '申請・承認') nh.push('ステータス');
-      nh.push('メッセージ名');
-      ds.getRange(1, 1, 1, nh.length).setValues([nh]);
-    } else {
+    if (!ds) {
       ds = ss.insertSheet(data.name);
       var h = ['タイムスタンプ', '送信者', '送信者メール'];
-      if (data.fields) data.fields.forEach(function(f) { h.push(f.name); });
       if (data.type === '申請・承認') h.push('ステータス');
       h.push('メッセージ名');
       ds.appendRow(h);
+    } else if (oldName && oldName !== data.name) {
+      ds.setName(data.name);
     }
+    // ステータス列は type 変更に追従: 申請・承認で無ければ挿入、テンプレなら不要
+    var mCol = findMessageCol_(ds);
+    var sCol = findStatusCol_(ds);
+    if (data.type === '申請・承認' && sCol === -1) {
+      // メッセージ名の直前にステータス列を挿入
+      if (mCol > 0) { ds.insertColumnBefore(mCol); ds.getRange(1, mCol).setValue('ステータス'); }
+      else { ds.getRange(1, ds.getLastColumn() + 1).setValue('ステータス'); ds.getRange(1, ds.getLastColumn() + 1).setValue('メッセージ名'); }
+    }
+
+    // 差分算出
+    var oldFieldRows = readFieldRows_(ss, wid);
+    var oldActive = oldFieldRows.filter(function(r) { return !r.deleted; });
+    var newFields = data.fields || [];
+    var diff = computeFieldDiff_(oldActive, newFields);
+
+    // 追加フィールドの列挿入: メッセージ名の直前に順次挿入し、dataCol を確定
+    var byId = {};
+    oldFieldRows.forEach(function(r) { byId[r.fieldId] = r; });
+    // 追加フィールドは「ステータス」列(なければ「メッセージ名」列)の直前に挿入する。
+    // 挿入後は毎回位置を取り直す(挿入で全ての後続列がシフトするため)。
+    diff.added.forEach(function(a) {
+      var beforeCol = findStatusCol_(ds);
+      if (beforeCol <= 0) beforeCol = findMessageCol_(ds);
+      var insertAt;
+      if (beforeCol > 0) { ds.insertColumnBefore(beforeCol); insertAt = beforeCol; }
+      else { insertAt = ds.getLastColumn() + 1; }
+      ds.getRange(1, insertAt).setValue(a.newField.name);
+      a.assignedDataCol = insertAt;
+      if (!a.newField.fieldId) a.newField.fieldId = generateFieldId_();
+      // 既存フィールド行(byId)の dataCol も、挿入位置以降なら +1 シフトする
+      Object.keys(byId).forEach(function(fid) {
+        var r = byId[fid];
+        if (r.dataCol >= insertAt) r.dataCol += 1;
+      });
+    });
+
+    // 改名: ヘッダー行を更新
+    diff.renamed.forEach(function(r) {
+      var col = byId[r.old.fieldId] ? byId[r.old.fieldId].dataCol : 0;
+      if (col > 0) ds.getRange(1, col).setValue(r.newField.name);
+    });
+
+    // _項目設定 の書き換え: 既存行を削除し、旧行(削除フィールド保持) + 新行(追加/継続) で再構築
+    if (flSheet.getLastRow() >= 2) {
+      var fd = flSheet.getRange(2, 1, flSheet.getLastRow() - 1, 9).getValues();
+      for (var j = fd.length - 1; j >= 0; j--) if (fd[j][0] === wid) flSheet.deleteRow(j + 2);
+    }
+    // 削除された旧フィールドは deleted=true で残す(dataCol 維持)
+    diff.deleted.forEach(function(o) {
+      flSheet.appendRow([wid, o.name, o.type, o.options || '', o.required || false, o.order || 0, o.fieldId, true, o.dataCol || 0]);
+    });
+    // もともと deleted=true だった行もそのまま残す
+    oldFieldRows.filter(function(r) { return r.deleted; }).forEach(function(o) {
+      flSheet.appendRow([wid, o.name, o.type, o.options || '', o.required || false, o.order || 0, o.fieldId, true, o.dataCol || 0]);
+    });
+    // 現在有効なフィールド行(継続 + 新規)を書き込む
+    newFields.forEach(function(n, idx) {
+      var fid = n.fieldId || null;
+      var dataCol = 0;
+      if (fid && byId[fid]) dataCol = byId[fid].dataCol;
+      // 追加フィールドは diff.added 側で dataCol 割当済み
+      var addedRec = null;
+      diff.added.forEach(function(a) { if (a.newField === n) addedRec = a; });
+      if (addedRec) { fid = addedRec.newField.fieldId; dataCol = addedRec.assignedDataCol; }
+      if (!fid) fid = generateFieldId_();
+      if (!dataCol) dataCol = 3 + (idx + 1); // フォールバック
+      flSheet.appendRow([wid, n.name, n.type, n.options || '', n.required || false, idx + 1, fid, false, dataCol]);
+    });
+
+    // ボタン設定
+    if (btSheet.getLastRow() >= 2) { var bd = btSheet.getRange(2, 1, btSheet.getLastRow() - 1, 9).getValues(); for (var k = bd.length - 1; k >= 0; k--) { if (bd[k][0] === wid) btSheet.deleteRow(k + 2); } }
+    if (data.buttons) data.buttons.forEach(function(b, idx2) { btSheet.appendRow([wid, b.name, b.status, b.color, idx2 + 1, b.threadReply || false, b.replyMsg || '', false, '']); });
+
+    // 外部シート
     if (data.externalSheet) {
       try {
         var eid = data.externalSheet.match(/\/d\/([a-zA-Z0-9_-]+)/);
-        if (eid) { var ess = SpreadsheetApp.openById(eid[1]); var es = ess.getSheetByName(data.name); if (!es) { es = ess.insertSheet(data.name); var eh = ['タイムスタンプ', '送信者', '送信者メール']; if (data.fields) data.fields.forEach(function(f) { eh.push(f.name); }); if (data.type === '申請・承認') eh.push('ステータス'); es.appendRow(eh); } }
+        if (eid) {
+          var ess = SpreadsheetApp.openById(eid[1]);
+          var es = ess.getSheetByName(data.name);
+          if (!es) {
+            es = ess.insertSheet(data.name);
+            var eh = ['タイムスタンプ', '送信者', '送信者メール'];
+            newFields.forEach(function(f) { eh.push(f.name); });
+            if (data.type === '申請・承認') eh.push('ステータス');
+            es.appendRow(eh);
+          }
+        }
       } catch (err) { Logger.log('外部シート作成エラー: ' + err.message); }
     }
-    writeAuditLog_(isNew ? 'workflow.create' : 'workflow.update', 'wid=' + wid, data.name);
+
+    writeAuditLog_(isNew ? 'workflow.create' : 'workflow.update', 'wid=' + wid, data.name + ' [' + describeFieldDiff_(diff) + ']');
     invalidateRenderCache_();
-    return { success: true, id: wid };
+    return { success: true, id: wid, diff: describeFieldDiff_(diff) };
   } catch (err) { Logger.log('api_saveWorkflow エラー: ' + err.message); try { notifyAdminOnError_(err, 'api_saveWorkflow'); } catch (e2) {} return { success: false, error: err.message }; }
   finally { try { lock.releaseLock(); } catch (e) {} }
+}
+
+// UI が保存前に差分を確認するために呼ぶ。実際の変更は行わない。
+// 戻り値: { added:[name...], deleted:[name...], renamed:[{from,to}...], reordered:bool, hasData:bool, dataRows:number }
+function api_previewFieldDiff(payload) {
+  try {
+    requireAdmin_();
+    var wid = payload && payload.id;
+    if (!wid) return { added: (payload.fields || []).map(function(f) { return f.name; }), deleted: [], renamed: [], reordered: false, hasData: false, dataRows: 0 };
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    ensureFieldSchema_(ss);
+    var oldFields = readFieldRows_(ss, wid).filter(function(r) { return !r.deleted; });
+    var diff = computeFieldDiff_(oldFields, payload.fields || []);
+    var ds = ss.getSheetByName(payload.name || (getWorkflowById_(wid) || {}).name);
+    var dataRows = 0;
+    if (ds) dataRows = Math.max(0, ds.getLastRow() - 1);
+    return {
+      added: diff.added.map(function(a) { return a.newField.name; }),
+      deleted: diff.deleted.map(function(d) { return d.name; }),
+      renamed: diff.renamed.map(function(r) { return { from: r.old.name, to: r.newField.name }; }),
+      reordered: diff.reordered,
+      hasData: dataRows > 0,
+      dataRows: dataRows
+    };
+  } catch (err) { return { error: err.message }; }
 }
 
 // 論理削除: status を 'archived' にして _設定.archivedAt(12列目) に日時を記録する。

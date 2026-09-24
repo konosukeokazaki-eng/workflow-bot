@@ -173,7 +173,9 @@ function saveField(idx){
   var n=document.getElementById('fName').value.trim();
   if(!n){showError('errFName');return;}
   hideError('errFName');
-  var f={name:n,type:document.getElementById('fType').value,options:document.getElementById('fOpts')?document.getElementById('fOpts').value:'',required:document.getElementById('fReq').checked,order:idx>=0?currentFields[idx].order:currentFields.length+1};
+  // fieldId は既存フィールド編集時に維持する(サーバ側の差分計算で使用)。追加時は空のまま(保存時にサーバが採番)。
+  var existingId=idx>=0?(currentFields[idx].fieldId||''):'';
+  var f={fieldId:existingId,name:n,type:document.getElementById('fType').value,options:document.getElementById('fOpts')?document.getElementById('fOpts').value:'',required:document.getElementById('fReq').checked,order:idx>=0?currentFields[idx].order:currentFields.length+1};
   if(idx>=0)currentFields[idx]=f;else currentFields.push(f);
   markDirty();document.querySelector('.modal-overlay').remove();document.getElementById('fieldList').innerHTML=renderFields();initSortable();updatePreview();hideError('errFields');
 }
@@ -226,8 +228,19 @@ function save(){
     approverUserIds:val('wfApproverUserIds'),
     mentionText:val('wfMentionText')||'',
     externalSheet:document.getElementById('wfExtCheck')&&document.getElementById('wfExtCheck').checked?val('wfExtSheet'):'',
-    fields:currentFields.map(function(f,i){return{name:f.name,type:f.type,options:f.options,required:f.required,order:i+1}}),
+    fields:currentFields.map(function(f,i){return{fieldId:f.fieldId||'',name:f.name,type:f.type,options:f.options,required:f.required,order:i+1}}),
     buttons:currentButtons.map(function(b,i){return{name:b.name,status:b.status,color:b.color,threadReply:b.threadReply,replyMsg:b.replyMsg,order:i+1}})};
+  // 既存ワークフロー編集時は先に差分をプレビューし、破壊的変更＋既存データがあれば確認ダイアログを出す
+  if(!data.id){ doSaveWorkflow(data); return; }
+  showLoading('差分を確認中...');
+  run('api_previewFieldDiff',data,function(diff){
+    if(!diff||diff.error){ doSaveWorkflow(data); return; }
+    var destructive = (diff.deleted && diff.deleted.length>0);
+    if(destructive && diff.hasData){ showFieldDiffConfirm(diff, function(){ doSaveWorkflow(data); }); }
+    else { doSaveWorkflow(data); }
+  });
+}
+function doSaveWorkflow(data){
   showLoading('保存中...');
   run('api_saveWorkflow',data,function(r){
     if(r.error){showToast('エラー: '+r.error);return;}
@@ -235,8 +248,26 @@ function save(){
     var ex=workflows.findIndex(function(w){return w.id===r.id});
     var nw={id:r.id,name:data.name,type:data.type,execSpace:data.execSpace,targetSpace:data.targetSpace,status:'有効',approvers:data.approvers||'',approverUserIds:data.approverUserIds||'',mentionText:data.mentionText||'',externalSheet:data.externalSheet||''};
     if(ex>=0)workflows[ex]=nw;else workflows.push(nw);
-    currentWfId=r.id;showToast('保存しました');renderList();
+    currentWfId=r.id;
+    // 保存後、フィールドの fieldId をサーバから再取得(次回編集時の差分計算に必要)
+    run('api_getWorkflowDetail',r.id,function(d){currentFields=d.fields||[];currentButtons=d.buttons||[];showToast('保存しました'+(r.diff?' ('+r.diff+')':''));renderList();});
   });
+}
+function showFieldDiffConfirm(diff, onOk){
+  var ov=mk('modal-overlay');
+  var html='<div class="modal" style="max-width:520px"><h3>⚠️ 項目の変更を確認してください</h3>'
+    +'<p style="font-size:13px;color:var(--c-text-sub);margin:12px 0">既存データが <b>'+diff.dataRows+'件</b> あります。以下の変更を実行します:</p>'
+    +'<div style="max-height:260px;overflow:auto;padding:12px;background:var(--c-bg-alt,#f7f7f8);border-radius:8px;font-size:13px;line-height:1.7">';
+  if(diff.deleted && diff.deleted.length){ html+='<p><b>🗑️ 削除:</b> '+diff.deleted.map(esc).join(', ')+'</p><p style="font-size:12px;color:var(--c-text-muted);margin-left:16px">→ 既存データはスプレッドシート上に列として保持されます(論理削除)。今後の申請では入力欄が消えます。</p>'; }
+  if(diff.added && diff.added.length){ html+='<p><b>➕ 追加:</b> '+diff.added.map(esc).join(', ')+'</p><p style="font-size:12px;color:var(--c-text-muted);margin-left:16px">→ 既存データの該当列は空欄になります。</p>'; }
+  if(diff.renamed && diff.renamed.length){ html+='<p><b>✏️ 改名:</b> '+diff.renamed.map(function(r){return esc(r.from)+' → '+esc(r.to);}).join(', ')+'</p>'; }
+  if(diff.reordered){ html+='<p><b>🔀 並び替え:</b> UI表示順のみ変更(データ列は不変)</p>'; }
+  html+='</div>'
+    +'<p style="font-size:12px;color:var(--c-text-muted);margin:12px 0">既存データの列はズレません。削除項目のデータは保持されるため、後から復元も可能です。</p>'
+    +'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" id="diffOkBtn">この内容で保存</button></div></div>';
+  ov.innerHTML=html;
+  document.body.appendChild(ov);
+  document.getElementById('diffOkBtn').onclick=function(){ ov.remove(); onOk(); };
 }
 /* ============================================================
    Approver Picker Modal - 送信先スペースのメンバーから承認者選択

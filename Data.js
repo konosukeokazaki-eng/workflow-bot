@@ -36,14 +36,27 @@ function getWorkflowById_(id) {
   } catch (err) { recordDataError_('getWorkflowById_', err); return null; }
 }
 
-function getWorkflowFields_(wid) {
+// includeDeleted=true を渡すと deleted=true の行も含める(管理画面の差分表示用)。
+// デフォルトは deleted を除外し、有効フィールドのみ返す。
+function getWorkflowFields_(wid, includeDeleted) {
   try {
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    ensureFieldSchema_(ss);
     var sheet = ss.getSheetByName(SHEET_FIELDS);
     if (!sheet || sheet.getLastRow() < 2) return [];
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues();
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 9).getValues();
     var fields = [];
-    data.forEach(function(r) { if (r[0] === wid) fields.push({ name: r[1], type: r[2], options: r[3], required: r[4] === true || r[4] === 'TRUE' || r[4] === 'true', order: r[5] }); });
+    data.forEach(function(r) {
+      if (r[0] !== wid) return;
+      var isDel = r[7] === true || r[7] === 'TRUE' || r[7] === 'true';
+      if (isDel && !includeDeleted) return;
+      fields.push({
+        name: r[1], type: r[2], options: r[3],
+        required: r[4] === true || r[4] === 'TRUE' || r[4] === 'true',
+        order: r[5], fieldId: r[6], deleted: isDel,
+        dataCol: Number(r[8]) || 0
+      });
+    });
     fields.sort(function(a, b) { return a.order - b.order; });
     return fields;
   } catch (err) { recordDataError_('getWorkflowFields_', err); return []; }
