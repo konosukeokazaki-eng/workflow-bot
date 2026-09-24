@@ -20,7 +20,6 @@
       <button class="btn btn-ghost" onclick="showHelp()">ヘルプ</button>
       <div class="sidebar-meta">
         <span>v<?!= appVersion ?> · <?!= envName ?></span>
-        <a href="mailto:<?!= contactEmail ?>?subject=%5BWorkflow%20Bot%5D%20%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B" class="sidebar-meta-link">問い合わせ</a>
       </div>
     </div>
   </div>
@@ -30,7 +29,6 @@
   var __initialData = <?!= initialData ?>;
   var __initialAdmins = <?!= initialAdmins ?>;
   var __currentUser = '<?!= currentUser ?>';
-  var __contactEmail = '<?!= contactEmail ?>';
 </script>
 <?!= include('JavaScript'); ?>
 </body>
