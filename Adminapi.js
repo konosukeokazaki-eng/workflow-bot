@@ -387,6 +387,11 @@ function api_saveWorkflow(data) {
       } catch (err) { Logger.log('外部シート作成エラー: ' + err.message); }
     }
 
+    // UI の並び順に物理列を揃える。追加/削除/並び替えの後に一度だけ呼ぶ。
+    // 内部で dataCol も更新される。
+    try { canonicalizeDataSheetLayout_(ss, ds, wid, data.type === '申請・承認'); }
+    catch (e) { Logger.log('canonicalize skip: ' + e.message); }
+
     writeAuditLog_(isNew ? 'workflow.create' : 'workflow.update', 'wid=' + wid, data.name + ' [' + describeFieldDiff_(diff) + ']');
     invalidateRenderCache_();
     return { success: true, id: wid, diff: describeFieldDiff_(diff) };

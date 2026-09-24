@@ -116,3 +116,82 @@ function findStatusCol_(ds) {
   for (var i = 0; i < headers.length; i++) if (headers[i] === 'ステータス') return i + 1;
   return -1;
 }
+
+// データシートの列レイアウトを正規化する:
+//   [タイムスタンプ, 送信者, 送信者メール, ...activeFields(order順), ステータス?, メッセージ名, ...deletedFields]
+// activeFields/deletedFields は _項目設定 の現状値(fieldId, dataCol)を基に決定する。
+// 実装は全データの読み出し → 新順で1回だけ setValues で書き戻し(原子的で安全)。
+// 書き戻し後、_項目設定 の dataCol を新位置に更新する。
+// 呼び出し前提: ensureFieldSchema_ 済み、_項目設定 は最新状態、データシートには不要な列がない。
+function canonicalizeDataSheetLayout_(ss, ds, wid, isApproval) {
+  var lastRow = ds.getLastRow();
+  var lastCol = ds.getLastColumn();
+  if (lastCol === 0) return;
+  var headerRow = ds.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  var fieldRows = readFieldRows_(ss, wid);
+  var active = fieldRows.filter(function(r) { return !r.deleted; }).slice().sort(function(a, b) { return a.order - b.order; });
+  var deleted = fieldRows.filter(function(r) { return r.deleted; });
+
+  // 特殊列の現在位置を検索
+  var findByHeader = function(name) { for (var i = 0; i < headerRow.length; i++) if (headerRow[i] === name) return i + 1; return -1; };
+  var tsCol = findByHeader('タイムスタンプ');
+  var senderCol = findByHeader('送信者');
+  var emailCol = findByHeader('送信者メール');
+  var statusCol = findByHeader('ステータス');
+  var msgCol = findByHeader('メッセージ名');
+
+  // 目標順(1-indexed の旧列を並べる)
+  var orderList = [];
+  if (tsCol > 0) orderList.push(tsCol);
+  if (senderCol > 0) orderList.push(senderCol);
+  if (emailCol > 0) orderList.push(emailCol);
+  active.forEach(function(f) { if (f.dataCol > 0 && f.dataCol <= lastCol) orderList.push(f.dataCol); });
+  if (isApproval && statusCol > 0) orderList.push(statusCol);
+  if (msgCol > 0) orderList.push(msgCol);
+  deleted.forEach(function(f) { if (f.dataCol > 0 && f.dataCol <= lastCol) orderList.push(f.dataCol); });
+
+  // すべての既存列を過不足なくカバーしているか確認
+  if (orderList.length !== lastCol) {
+    // 見落とし列を末尾に足して整合を取る(データを消さないための安全策)
+    var seen = {};
+    orderList.forEach(function(c) { seen[c] = true; });
+    for (var c = 1; c <= lastCol; c++) if (!seen[c]) orderList.push(c);
+  }
+  var duplicates = {};
+  var deduped = [];
+  orderList.forEach(function(c) { if (!duplicates[c]) { duplicates[c] = true; deduped.push(c); } });
+  orderList = deduped;
+
+  // 既に正しい順序なら何もしない
+  var alreadyOrdered = true;
+  for (var i = 0; i < orderList.length; i++) if (orderList[i] !== i + 1) { alreadyOrdered = false; break; }
+
+  if (!alreadyOrdered) {
+    var allData = ds.getRange(1, 1, lastRow, lastCol).getValues();
+    var reordered = allData.map(function(row) { return orderList.map(function(c) { return row[c - 1]; }); });
+    ds.getRange(1, 1, reordered.length, reordered[0].length).setValues(reordered);
+  }
+
+  // 新しい dataCol を fieldId ごとに算出して _項目設定 に反映
+  var newColByFid = {};
+  var pos = 1;
+  if (tsCol > 0) pos++;
+  if (senderCol > 0) pos++;
+  if (emailCol > 0) pos++;
+  active.forEach(function(f) { newColByFid[f.fieldId] = pos++; });
+  if (isApproval && statusCol > 0) pos++;
+  if (msgCol > 0) pos++;
+  deleted.forEach(function(f) { newColByFid[f.fieldId] = pos++; });
+
+  var fl = ss.getSheetByName(SHEET_FIELDS);
+  if (fl && fl.getLastRow() >= 2) {
+    var flData = fl.getRange(2, 1, fl.getLastRow() - 1, 9).getValues();
+    for (var j = 0; j < flData.length; j++) {
+      if (flData[j][0] === wid && flData[j][6] && newColByFid[flData[j][6]]) {
+        var target = newColByFid[flData[j][6]];
+        if (Number(flData[j][8]) !== target) fl.getRange(j + 2, 9).setValue(target);
+      }
+    }
+  }
+}
