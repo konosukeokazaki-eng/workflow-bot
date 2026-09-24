@@ -18,6 +18,7 @@ window.onload=function(){
   renderList();
   google.script.run.withSuccessHandler(function(d){spaces=d||[];}).withFailureHandler(noop).api_getSpaces();
   google.script.run.withSuccessHandler(function(s){if(s&&!s.accepted)showPrivacyModal();}).withFailureHandler(noop).api_getPrivacyStatus();
+  if(location.hash==='#help')setTimeout(showHelp,50);
 };
 function showPrivacyModal(){
   var ov=mk('modal-overlay');
@@ -386,7 +387,10 @@ function showHelp(){
   var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
   ov.innerHTML=''
     +'<div class="modal help-modal">'
-    +'<h3>ご利用ガイド</h3>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px">'
+    +'<h3 style="margin:0">ご利用ガイド</h3>'
+    +'<button class="btn btn-ghost" style="font-size:12px;padding:6px 12px" onclick="window.open(location.pathname+\'#help\',\'_blank\')" title="別タブで開いて操作しながら見る"><span class="mi" style="font-size:14px;vertical-align:middle">open_in_new</span> 別タブで開く</button>'
+    +'</div>'
     +'<div class="help-tabs">'
     +'<button class="help-tab active" data-pane="overview">はじめに</button>'
     +'<button class="help-tab" data-pane="create">作成する</button>'
