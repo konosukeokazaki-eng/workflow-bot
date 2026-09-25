@@ -251,8 +251,26 @@ function doSaveWorkflow(data){
     if(ex>=0)workflows[ex]=nw;else workflows.push(nw);
     currentWfId=r.id;
     // 保存後、フィールドの fieldId をサーバから再取得(次回編集時の差分計算に必要)
-    run('api_getWorkflowDetail',r.id,function(d){currentFields=d.fields||[];currentButtons=d.buttons||[];showToast('保存しました'+(r.diff?' ('+r.diff+')':''));renderList();});
+    run('api_getWorkflowDetail',r.id,function(d){
+      currentFields=d.fields||[];currentButtons=d.buttons||[];
+      showToast('保存しました'+(r.diff?' ('+r.diff+')':''));
+      // Bot 未参加や外部シート書込不可などの警告があればモーダルで通知(サイレント失敗の事前予防)
+      if(r.warnings && r.warnings.length){ showSaveWarnings(r.warnings); }
+      renderList();
+    });
   });
+}
+function showSaveWarnings(warnings){
+  var ov=mk('modal-overlay');
+  var html='<div class="modal" style="max-width:520px"><h3>⚠️ 保存後の警告</h3>'
+    +'<p style="font-size:13px;color:var(--c-text-sub);margin:12px 0">保存自体は成功しましたが、以下の理由でこのままでは正常に動作しない可能性があります:</p>'
+    +'<ul style="font-size:13px;line-height:1.7;padding-left:20px">'
+    +warnings.map(function(w){return '<li>'+esc(w)+'</li>';}).join('')
+    +'</ul>'
+    +'<p style="font-size:12px;color:var(--c-text-muted);margin:12px 0">対処後にもう一度「保存」を押すと再チェックされます。</p>'
+    +'<div class="actions"><button class="btn btn-primary" onclick="this.closest(\'.modal-overlay\').remove()">OK</button></div></div>';
+  ov.innerHTML=html;
+  document.body.appendChild(ov);
 }
 function showFieldDiffConfirm(diff, onOk){
   var ov=mk('modal-overlay');

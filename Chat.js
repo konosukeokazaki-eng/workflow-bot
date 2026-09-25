@@ -88,6 +88,8 @@ function handleSubmitWorkflow_(event) {
       initHeaders.push('メッセージ名');
       dataSheet.appendRow(initHeaders);
     }
+    // 手動で列が消された場合の防衛: 必須システム列(ステータス/メッセージ名など)を自動復旧
+    try { ensureDataSheetSchema_(dataSheet, wf.type === '申請・承認'); } catch (e) { Logger.log('ensureDataSheetSchema_ skip: ' + e.message); }
     var lastCol = dataSheet.getLastColumn();
     var headerRow = dataSheet.getRange(1, 1, 1, lastCol).getValues()[0];
     var row = new Array(lastCol);
@@ -179,6 +181,8 @@ function handleApproval_(e) {
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheetByName(wf.name);
     if (!sheet) return htmlPage_('⚠️', 'エラー', 'データシートが見つかりません', '#666');
+    // 手動で列が消された場合の防衛: ステータス/メッセージ名列を自動復旧
+    try { ensureDataSheetSchema_(sheet, wf.type === '申請・承認'); } catch (e) { Logger.log('ensureDataSheetSchema_ skip: ' + e.message); }
     var fields = getWorkflowFields_(workflowId);
     var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
     var statusCol = -1, msgCol = -1;
@@ -187,9 +191,9 @@ function handleApproval_(e) {
     var currentStatus = sheet.getRange(rowIndex, statusCol).getValue();
     if (currentStatus !== '承認待ち') return htmlPage_('⚠️', '処理済み', 'この申請は既に「' + currentStatus + '」されています', '#666');
     if (wf.approvers) {
-      var currentUser = Session.getActiveUser().getEmail();
-      var approverList = wf.approvers.split(',').map(function(a) { return a.trim().toLowerCase(); });
-      if (approverList.indexOf(currentUser.toLowerCase()) === -1) return htmlPage_('🚫', '権限がありません', '', '#666');
+      var currentUser = normalizeEmail_(Session.getActiveUser().getEmail());
+      var approverList = wf.approvers.split(',').map(function(a) { return normalizeEmail_(a); });
+      if (!currentUser || approverList.indexOf(currentUser) === -1) return htmlPage_('🚫', '権限がありません', '', '#666');
     }
     sheet.getRange(rowIndex, statusCol).setValue(newStatus);
     updateExternalSheet_(wf, wf.name, rowIndex, statusCol, newStatus);

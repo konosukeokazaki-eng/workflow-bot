@@ -2,7 +2,7 @@
 // Main.gs - 定数 + doPost + doGet + ルーティング
 // ============================================================
 
-var VERSION = '1.3.0';
+var VERSION = '1.4.0';
 
 var SHEET_SETTINGS   = '_設定';
 var SHEET_FIELDS     = '_項目設定';
@@ -86,7 +86,12 @@ function healthCheck_() {
     if (st && st.getLastRow() >= 2) workflowCount = st.getLastRow() - 1;
     if (ad && ad.getLastRow() >= 2) adminCount = ad.getLastRow() - 1;
   } catch (e) { sheetOk = false; }
-  var body = { ok: sheetOk, version: VERSION, env: ENV_NAME, sheetOk: sheetOk, workflows: workflowCount, admins: adminCount, checkedAt: new Date().toISOString() };
+  // サービスアカウントトークンが取得できるか(鍵ローテ/失効の早期検知)
+  var saTokenOk = false, saTokenError = '';
+  try { getServiceAccountToken_(); saTokenOk = true; }
+  catch (e) { saTokenError = e.message; }
+  var overallOk = sheetOk && saTokenOk;
+  var body = { ok: overallOk, version: VERSION, env: ENV_NAME, sheetOk: sheetOk, serviceAccountOk: saTokenOk, serviceAccountError: saTokenError, workflows: workflowCount, admins: adminCount, checkedAt: new Date().toISOString() };
   return ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON);
 }
 

@@ -2,29 +2,37 @@
 // Auth.gs - 認証・セキュリティ・Bot管理・バリデーション・監査ログ
 // ============================================================
 
+// メールアドレスから全角空白/NBSP/ゼロ幅文字などの不可視文字を除去し、小文字化する。
+// 目的: 承認者/管理者リストに手貼りされた際の見えないゴミによる「本人なのに権限なし」誤判定を防ぐ。
+function normalizeEmail_(s) {
+  if (s == null) return '';
+  return String(s).replace(/[\u0000-\u0020\u00A0\u200B-\u200D\u3000\uFEFF]/g, '').toLowerCase();
+}
+
 // 5 分キャッシュ。書き込み系 API(api_saveAdmins など)後は invalidateAdminCache_ を呼ぶこと。
 function isAdmin_(email) {
-  if (!email) return false;
+  var e = normalizeEmail_(email);
+  if (!e) return false;
   var cache = null, key = null;
   try {
     cache = CacheService.getScriptCache();
-    key = 'admin_' + String(email).toLowerCase();
+    key = 'admin_' + e;
     var cached = cache.get(key);
     if (cached === 'y') return true;
     if (cached === 'n') return false;
-  } catch (e) {}
+  } catch (ex) {}
   try {
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheetByName(SHEET_ADMINS);
-    if (!sheet || sheet.getLastRow() < 2) { if (cache) try { cache.put(key, 'y', 300); } catch (e) {} return true; }
+    if (!sheet || sheet.getLastRow() < 2) { if (cache) try { cache.put(key, 'y', 300); } catch (ex) {} return true; }
     var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
     for (var i = 0; i < data.length; i++) {
-      if (String(data[i][0]).trim().toLowerCase() === email.toLowerCase()) {
-        if (cache) try { cache.put(key, 'y', 300); } catch (e) {}
+      if (normalizeEmail_(data[i][0]) === e) {
+        if (cache) try { cache.put(key, 'y', 300); } catch (ex) {}
         return true;
       }
     }
-    if (cache) try { cache.put(key, 'n', 300); } catch (e) {}
+    if (cache) try { cache.put(key, 'n', 300); } catch (ex) {}
     return false;
   } catch (err) { Logger.log('isAdmin_ エラー: ' + err.message); return false; }
 }
@@ -36,7 +44,7 @@ function invalidateAdminCache_() {
     var sheet = ss.getSheetByName(SHEET_ADMINS);
     if (!sheet || sheet.getLastRow() < 2) return;
     var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
-    var keys = data.map(function(r) { return 'admin_' + String(r[0]).trim().toLowerCase(); }).filter(function(k) { return k !== 'admin_'; });
+    var keys = data.map(function(r) { return 'admin_' + normalizeEmail_(r[0]); }).filter(function(k) { return k !== 'admin_'; });
     if (keys.length > 0) CacheService.getScriptCache().removeAll(keys);
   } catch (e) { Logger.log('invalidateAdminCache_ 失敗: ' + e.message); }
 }
@@ -102,6 +110,39 @@ function addBotToSpace_(sid) {
   try { var t = getServiceAccountToken_(); UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sid + '/members', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + t }, payload: JSON.stringify({ member: { name: 'users/app', type: 'BOT' } }), muteHttpExceptions: true }); } catch (e) { Logger.log('Bot追加エラー: ' + e.message); }
 }
 
+// 指定スペースに Bot が参加しているか検証し、未参加なら追加を試みる。
+// 戻り値: { ok: true } | { ok: false, error: string }
+// 保存時にサイレント失敗(送信したのに Chat にカードが流れない)を早期検出するために使う。
+function verifyBotAccess_(spaceId) {
+  if (!spaceId) return { ok: false, error: 'スペースIDが未設定です' };
+  try {
+    var token = getServiceAccountToken_();
+    var url = 'https://chat.googleapis.com/v1/' + spaceId;
+    var resp = UrlFetchApp.fetch(url, { method: 'get', headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
+    var code = resp.getResponseCode();
+    if (code === 200) return { ok: true };
+    if (code === 403 || code === 404) {
+      // Bot 未参加の可能性が高いので追加してリトライ
+      try {
+        var addResp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + spaceId + '/members', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ member: { name: 'users/app', type: 'BOT' } }), muteHttpExceptions: true });
+        var addCode = addResp.getResponseCode();
+        if (addCode >= 400 && addCode !== 409) {
+          return { ok: false, error: 'Bot をスペースに追加できません(HTTP ' + addCode + ')。手動でスペースに Bot を招待してください。' };
+        }
+      } catch (e) {
+        return { ok: false, error: 'Bot 追加時に例外: ' + e.message };
+      }
+      Utilities.sleep(1000);
+      var resp2 = UrlFetchApp.fetch(url, { method: 'get', headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
+      if (resp2.getResponseCode() === 200) return { ok: true };
+      return { ok: false, error: 'Bot をスペースに参加させられませんでした。スペース設定を確認してください。' };
+    }
+    return { ok: false, error: 'スペース確認失敗 HTTP ' + code };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ---------- 監査ログ ----------
 
 function writeAuditLog_(action, target, detail) {
@@ -129,11 +170,17 @@ function validateWorkflowName_(name) {
 
 function validateEmailList_(str) {
   if (!str) return null;
-  var list = String(str).split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+  var list = String(str).split(',').map(function(s) { return normalizeEmail_(s); }).filter(function(s) { return s; });
   for (var i = 0; i < list.length; i++) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(list[i])) return '不正なメール形式: ' + list[i];
   }
   return null;
+}
+
+// カンマ区切りメール文字列を正規化(不可視文字除去+小文字化)して返す。空要素は除外。
+function sanitizeEmailList_(str) {
+  if (!str) return '';
+  return String(str).split(',').map(function(s) { return normalizeEmail_(s); }).filter(function(s) { return s; }).join(',');
 }
 
 function validateSheetUrl_(url) {

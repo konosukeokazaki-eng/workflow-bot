@@ -8,6 +8,15 @@
   <?!= include('Stylesheet'); ?>
 </head>
 <body>
+<?
+  var __envIsProd = (envName === 'prod');
+  var __envColor = __envIsProd ? '#1a73e8' : '#e65100';
+  var __envLabel = __envIsProd ? '本番' : ('テスト (' + envName + ')');
+?>
+<div id="envBanner" style="background:<?= __envColor ?>;color:#fff;padding:4px 12px;font-size:12px;display:flex;justify-content:space-between;align-items:center;font-family:sans-serif">
+  <span><b><?!= __envLabel ?></b> 環境 · v<?!= appVersion ?></span>
+  <span style="opacity:.85;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%" title="<?!= selfUrl ?>"><?!= selfUrl ?></span>
+</div>
 <div class="app">
   <div class="sidebar">
     <div class="sidebar-header"><h1>ワークフロー</h1><button class="btn btn-primary btn-sm" onclick="createNew()"><span class="mi" style="font-size:18px">add</span>新規</button></div>

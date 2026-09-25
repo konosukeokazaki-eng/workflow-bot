@@ -101,6 +101,29 @@ function describeFieldDiff_(diff) {
   return parts.length ? parts.join(' ') : '変更なし';
 }
 
+// データシートに必須のシステム列(タイムスタンプ/送信者/送信者メール/(承認型ならステータス)/メッセージ名)が
+// 揃っているかを確認し、欠けていれば末尾に補完する。管理者が手動で列を削除した場合の防衛策。
+// isApproval: 対象ワークフローが「申請・承認」型なら true(ステータス列を要求)
+// 戻り値: 補った列名の配列(空配列なら変更なし)
+function ensureDataSheetSchema_(ds, isApproval) {
+  if (!ds) return [];
+  var lastCol = ds.getLastColumn();
+  var headers = lastCol > 0 ? ds.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  var required = ['タイムスタンプ', '送信者', '送信者メール'];
+  if (isApproval) required.push('ステータス');
+  required.push('メッセージ名');
+  var added = [];
+  required.forEach(function(name) {
+    if (headers.indexOf(name) === -1) {
+      var newCol = ds.getLastColumn() + 1;
+      ds.getRange(1, newCol).setValue(name);
+      headers.push(name);
+      added.push(name);
+    }
+  });
+  return added;
+}
+
 // データシートで「メッセージ名」列の位置を返す(1-indexed)。なければ -1。
 function findMessageCol_(ds) {
   if (!ds || ds.getLastColumn() === 0) return -1;
