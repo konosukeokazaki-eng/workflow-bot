@@ -17,6 +17,7 @@ function getAdminPage_() {
   tpl.appVersion = VERSION;
   tpl.contactEmail = CONTACT_EMAIL;
   tpl.envName = ENV_NAME;
+  tpl.functionUrl = FUNCTION_URL;
   return tpl.evaluate().setTitle('ワークフローBot 管理画面');
 }
 
