@@ -22,9 +22,11 @@ function getConfig_(key, fallback) {
   } catch (e) { return fallback; }
 }
 
-var SPREADSHEET_ID = getConfig_('SPREADSHEET_ID', '1iHLqkdJyCZUP6eivZiMovZvt6kbrWnzTDsTV2O5GUS8');
-var FUNCTION_URL   = getConfig_('FUNCTION_URL',   'https://script.google.com/macros/s/AKfycbwwTU7juIOgPDJiqRNNfksYsKls0ypfHjkykSWvI571cwjmqeIgtyYCHUZlscoYSyVu/exec');
-var CONTACT_EMAIL  = getConfig_('CONTACT_EMAIL',  'konosuke.okazaki@cmind-co.jp');
+// 機密値はスクリプトプロパティで設定する。リポジトリにフォールバックを残さない。
+// 設定キー: SPREADSHEET_ID / FUNCTION_URL / CONTACT_EMAIL / ENV_NAME
+var SPREADSHEET_ID = getConfig_('SPREADSHEET_ID', '');
+var FUNCTION_URL   = getConfig_('FUNCTION_URL',   '');
+var CONTACT_EMAIL  = getConfig_('CONTACT_EMAIL',  '');
 var ENV_NAME       = getConfig_('ENV_NAME',       'prod');
 
 var COLOR_MAP = {
