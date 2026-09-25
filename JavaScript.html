@@ -18,7 +18,7 @@ window.onload=function(){
   renderList();
   google.script.run.withSuccessHandler(function(d){spaces=d||[];}).withFailureHandler(noop).api_getSpaces();
   google.script.run.withSuccessHandler(function(s){if(s&&!s.accepted)showPrivacyModal();}).withFailureHandler(noop).api_getPrivacyStatus();
-  try{google.script.url.getLocation(function(loc){if(loc&&loc.parameter&&loc.parameter.help==='1')setTimeout(showHelp,50);});}catch(e){}
+  try{google.script.url.getLocation(function(loc){if(loc&&loc.parameter&&loc.parameter.help==='1'){document.body.classList.add('help-only');setTimeout(showHelp,50);}});}catch(e){}
 };
 function showPrivacyModal(){
   var ov=mk('modal-overlay');

@@ -296,6 +296,11 @@ input.input-error { border-color:var(--c-danger); animation:shake 0.3s ease; }
 .help-pane { display:none; }
 .help-pane.active { display:block; }
 .modal.help-modal { width:720px; max-height:80vh; overflow-y:auto; }
+/* 別タブでヘルプ単体表示するモード。管理画面を隠しヘルプを全画面化。 */
+body.help-only .app { display:none; }
+body.help-only .modal-overlay { background:var(--c-bg,#fff); animation:none; padding:0; }
+body.help-only .modal.help-modal { width:100%; max-width:900px; max-height:none; height:100vh; border-radius:0; box-shadow:none; }
+body.help-only .modal-overlay .actions { display:none; }
 
 /* ============================================================
    Animations
