@@ -293,7 +293,8 @@ function api_saveWorkflow(data) {
     var sn = oldName || data.name;
     var ds = ss.getSheetByName(sn);
     if (!ds) {
-      ds = ss.insertSheet(data.name);
+      // 新規データシートはタブ一覧の右端に追加(既存のシステムシートより後ろに並べて視認性を上げる)
+      ds = ss.insertSheet(data.name, ss.getSheets().length);
       var h = ['タイムスタンプ', '送信者', '送信者メール'];
       if (data.type === '申請・承認') h.push('ステータス');
       h.push('メッセージ名');
@@ -382,7 +383,7 @@ function api_saveWorkflow(data) {
           var ess = SpreadsheetApp.openById(eid[1]);
           var es = ess.getSheetByName(data.name);
           if (!es) {
-            es = ess.insertSheet(data.name);
+            es = ess.insertSheet(data.name, ess.getSheets().length);
             var eh = ['タイムスタンプ', '送信者', '送信者メール'];
             newFields.forEach(function(f) { eh.push(f.name); });
             if (data.type === '申請・承認') eh.push('ステータス');

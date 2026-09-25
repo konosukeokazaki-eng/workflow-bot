@@ -81,7 +81,8 @@ function handleSubmitWorkflow_(event) {
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var dataSheet = ss.getSheetByName(wf.name);
     if (!dataSheet) {
-      dataSheet = ss.insertSheet(wf.name);
+      // 保存時に作られていなかった場合の遅延作成もタブ右端に配置
+      dataSheet = ss.insertSheet(wf.name, ss.getSheets().length);
       var initHeaders = ['タイムスタンプ', '送信者', '送信者メール'];
       fields.forEach(function(f) { initHeaders.push(f.name); });
       if (wf.type === '申請・承認') initHeaders.push('ステータス');

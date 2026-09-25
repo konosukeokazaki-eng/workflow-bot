@@ -82,7 +82,7 @@ function writeToExternalSheet_(wf, rowData) {
     if (!extId) return;
     var extSs = SpreadsheetApp.openById(extId[1]);
     var extSheet = extSs.getSheetByName(wf.name);
-    if (!extSheet) { extSheet = extSs.insertSheet(wf.name); extSheet.appendRow(rowData.headers); }
+    if (!extSheet) { extSheet = extSs.insertSheet(wf.name, extSs.getSheets().length); extSheet.appendRow(rowData.headers); }
     extSheet.appendRow(rowData.values);
   } catch (err) { recordDataError_('writeToExternalSheet_', err); }
 }
