@@ -17,7 +17,9 @@ function getAdminPage_() {
   tpl.appVersion = VERSION;
   tpl.contactEmail = CONTACT_EMAIL;
   tpl.envName = ENV_NAME;
-  tpl.functionUrl = FUNCTION_URL;
+  // 別タブで開くヘルプ用: 現在の実行URL(@HEADなら/dev, 本番なら/exec)を返す。
+  // FUNCTION_URL はChat用の固定バージョンなので、新タブが古いバージョンを開いてしまう。
+  try { tpl.selfUrl = ScriptApp.getService().getUrl(); } catch (e) { tpl.selfUrl = FUNCTION_URL; }
   return tpl.evaluate().setTitle('ワークフローBot 管理画面');
 }
 
