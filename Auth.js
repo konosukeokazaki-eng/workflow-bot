@@ -59,6 +59,68 @@ function requireAdmin_() {
   return email;
 }
 
+// ---------- ロール / 権限モデル ----------
+// _管理者 シートの C 列(3列目)に role(owner/editor/member) を保持する。
+// 空欄の場合は既存管理者の互換性維持のため owner 扱い(移行後に手動で降格する)。
+var ROLE_OWNER = 'owner';
+var ROLE_EDITOR = 'editor';
+var ROLE_MEMBER = 'member';
+
+// _管理者 シートに role 列(3列目)を保証する。ヘッダーが未設定なら追加。
+function ensureAdminSchema_(ss) {
+  var sheet = ss.getSheetByName(SHEET_ADMINS);
+  if (!sheet) return;
+  if (sheet.getLastColumn() < 2 || sheet.getRange(1, 2).getValue() !== '同意日時') sheet.getRange(1, 2).setValue('同意日時');
+  if (sheet.getLastColumn() < 3 || sheet.getRange(1, 3).getValue() !== '権限') sheet.getRange(1, 3).setValue('権限');
+}
+
+// 指定メールのロールを返す。未登録なら null。
+function getUserRole_(email) {
+  var e = normalizeEmail_(email);
+  if (!e) return null;
+  try {
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var sheet = ss.getSheetByName(SHEET_ADMINS);
+    if (!sheet || sheet.getLastRow() < 2) return ROLE_OWNER; // シート未整備なら全員 owner(初期セットアップ)
+    var lastCol = Math.max(sheet.getLastColumn(), 3);
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
+    for (var i = 0; i < data.length; i++) {
+      if (normalizeEmail_(data[i][0]) === e) {
+        var r = String(data[i][2] || '').trim().toLowerCase();
+        if (r === ROLE_EDITOR || r === ROLE_MEMBER || r === ROLE_OWNER) return r;
+        return ROLE_OWNER; // 空欄は既存管理者互換で owner
+      }
+    }
+    return null;
+  } catch (err) { Logger.log('getUserRole_ エラー: ' + err.message); return null; }
+}
+
+// wf: getWorkflowById_ が返す形式(creator, collaborators を含む)
+function _isCreatorOrCollaborator_(email, wf) {
+  var e = normalizeEmail_(email);
+  if (!e) return false;
+  if (normalizeEmail_(wf.creator) === e) return true;
+  var collab = String(wf.collaborators || '').split(',').map(function(s) { return normalizeEmail_(s); });
+  return collab.indexOf(e) !== -1;
+}
+
+function canViewWorkflow_(email, wf, role) {
+  if (role === ROLE_OWNER || role === ROLE_EDITOR) return true;
+  if (role === ROLE_MEMBER) return _isCreatorOrCollaborator_(email, wf);
+  return false;
+}
+function canEditWorkflow_(email, wf, role) {
+  if (role === ROLE_OWNER || role === ROLE_EDITOR) return true;
+  if (role === ROLE_MEMBER) return _isCreatorOrCollaborator_(email, wf);
+  return false;
+}
+function canDeleteWorkflow_(email, wf, role) {
+  if (role === ROLE_OWNER) return true;
+  // editor/member は自分作成分または共同編集者のみ削除可
+  return _isCreatorOrCollaborator_(email, wf);
+}
+function canManageAdmins_(role) { return role === ROLE_OWNER; }
+
 // 新トークン形式: base64(sha256(wid_row_issuedAt_SPREADSHEET_ID)).slice(0,16) + '.' + issuedAt
 // 旧トークン形式(タイムスタンプなし)も後方互換で許容する。
 function generateToken_(wid, rowIndex, issuedAtOpt) {

@@ -13,7 +13,9 @@ function getAdminPage_() {
   tpl.initialData = JSON.stringify(getAllWorkflowsForRender_());
   tpl.initialSpaces = '[]';
   tpl.initialAdmins = JSON.stringify(getAdminsForRender_());
-  tpl.currentUser = Session.getActiveUser().getEmail();
+  var _cu = Session.getActiveUser().getEmail();
+  tpl.currentUser = _cu;
+  tpl.currentRole = getUserRole_(_cu) || ROLE_OWNER;
   tpl.appVersion = VERSION;
   tpl.contactEmail = CONTACT_EMAIL;
   tpl.envName = ENV_NAME;
@@ -33,17 +35,36 @@ function getAllWorkflowsForRender_() {
   try {
     var cache = CacheService.getScriptCache();
     var cached = cache.get('workflows_all');
-    if (cached) return JSON.parse(cached);
-    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    var sheet = ss.getSheetByName(SHEET_SETTINGS);
-    if (!sheet || sheet.getLastRow() < 2) return [];
-    var lastCol = Math.max(sheet.getLastColumn(), 14);
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
-    // archived を除外する。復元一覧は api_getArchivedWorkflows で別途取得。
-    var result = data.filter(function(r) { return r[7] !== 'archived'; }).map(function(r) { return { id: r[0], name: r[1], type: r[2], execSpace: r[3], targetSpace: r[4], creator: r[5], created: r[6], status: r[7], approvers: r[9] || '', externalSheet: r[10] || '', approverUserIds: r[12] || '', mentionText: r[13] || '' }; });
-    try { cache.put('workflows_all', JSON.stringify(result), 300); } catch (e) {}
-    return result;
+    var full;
+    if (cached) {
+      full = JSON.parse(cached);
+    } else {
+      var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+      var sheet = ss.getSheetByName(SHEET_SETTINGS);
+      if (!sheet || sheet.getLastRow() < 2) return [];
+      var lastCol = Math.max(sheet.getLastColumn(), 15);
+      var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
+      full = data.filter(function(r) { return r[7] !== 'archived'; }).map(function(r) { return { id: r[0], name: r[1], type: r[2], execSpace: r[3], targetSpace: r[4], creator: r[5], created: r[6], status: r[7], approvers: r[9] || '', externalSheet: r[10] || '', approverUserIds: r[12] || '', mentionText: r[13] || '', collaborators: r[14] || '' }; });
+      try { cache.put('workflows_all', JSON.stringify(full), 300); } catch (e) {}
+    }
+    return _annotateWorkflowsForUser_(full);
   } catch (err) { Logger.log('getAllWorkflowsForRender_ エラー: ' + err.message); return []; }
+}
+
+// 現在のユーザ視点で閲覧可能なもののみに絞り、canEdit/canDelete を付与する。
+function _annotateWorkflowsForUser_(list) {
+  var email = '';
+  try { email = Session.getActiveUser().getEmail() || ''; } catch (e) {}
+  var role = getUserRole_(email) || ROLE_OWNER;
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var w = list[i];
+    if (!canViewWorkflow_(email, w, role)) continue;
+    w.canEdit = canEditWorkflow_(email, w, role);
+    w.canDelete = canDeleteWorkflow_(email, w, role);
+    out.push(w);
+  }
+  return out;
 }
 
 function getAdminsForRender_() {
@@ -52,24 +73,26 @@ function getAdminsForRender_() {
     var cached = cache.get('admins_all');
     if (cached) return JSON.parse(cached);
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    ensureAdminSchema_(ss);
     var sheet = ss.getSheetByName(SHEET_ADMINS);
     if (!sheet || sheet.getLastRow() < 2) return [];
-    var result = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().map(function(r) { return String(r[0]).trim(); }).filter(function(e) { return e; });
+    var lastCol = Math.max(sheet.getLastColumn(), 3);
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
+    var result = data.map(function(r) {
+      var email = String(r[0] || '').trim();
+      if (!email) return null;
+      var role = String(r[2] || '').trim().toLowerCase();
+      if (role !== ROLE_EDITOR && role !== ROLE_MEMBER) role = ROLE_OWNER;
+      return { email: email, role: role };
+    }).filter(function(e) { return e; });
     try { cache.put('admins_all', JSON.stringify(result), 300); } catch (e) {}
     return result;
   } catch (err) { Logger.log('getAdminsForRender_ エラー: ' + err.message); return []; }
 }
 
 function api_getWorkflows() {
-  try {
-    requireAdmin_();
-    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    var sheet = ss.getSheetByName(SHEET_SETTINGS);
-    if (!sheet || sheet.getLastRow() < 2) return [];
-    var lastCol = Math.max(sheet.getLastColumn(), 14);
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
-    return data.filter(function(r) { return r[7] !== 'archived'; }).map(function(r) { return { id: r[0], name: r[1], type: r[2], execSpace: r[3], targetSpace: r[4], creator: r[5], created: r[6], status: r[7], approvers: r[9] || '', externalSheet: r[10] || '', approverUserIds: r[12] || '', mentionText: r[13] || '' }; });
-  } catch (err) { recordDataError_('api_getWorkflows', err); return []; }
+  try { requireAdmin_(); return getAllWorkflowsForRender_(); }
+  catch (err) { recordDataError_('api_getWorkflows', err); return []; }
 }
 
 function api_getArchivedWorkflows() {
@@ -86,7 +109,8 @@ function api_getArchivedWorkflows() {
 function api_restoreWorkflow(wid) {
   var lock = LockService.getScriptLock();
   try {
-    requireAdmin_();
+    var caller = requireAdmin_();
+    if (!canManageAdmins_(getUserRole_(caller))) return { success: false, error: 'この操作はオーナー権限が必要です' };
     if (!lock.tryLock(15000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var st = ss.getSheetByName(SHEET_SETTINGS);
@@ -112,7 +136,8 @@ function api_restoreWorkflow(wid) {
 function api_purgeWorkflow(wid) {
   var lock = LockService.getScriptLock();
   try {
-    requireAdmin_();
+    var caller = requireAdmin_();
+    if (!canManageAdmins_(getUserRole_(caller))) return { success: false, error: 'この操作はオーナー権限が必要です' };
     if (!lock.tryLock(30000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var st = ss.getSheetByName(SHEET_SETTINGS);
@@ -234,13 +259,8 @@ function api_getSpaceMembers(spaceId) {
 }
 
 function api_getAdmins() {
-  try {
-    requireAdmin_();
-    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    var sheet = ss.getSheetByName(SHEET_ADMINS);
-    if (!sheet || sheet.getLastRow() < 2) return [];
-    return sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().map(function(r) { return String(r[0]).trim(); }).filter(function(e) { return e; });
-  } catch (err) { recordDataError_('api_getAdmins', err); return []; }
+  try { requireAdmin_(); return getAdminsForRender_(); }
+  catch (err) { recordDataError_('api_getAdmins', err); return []; }
 }
 
 // フィールドの追加/削除/改名/並び替えでデータシートの列がズレないよう、
@@ -252,13 +272,23 @@ function api_getAdmins() {
 function api_saveWorkflow(data) {
   var lock = LockService.getScriptLock();
   try {
-    requireAdmin_();
+    var caller = requireAdmin_();
+    var callerRole = getUserRole_(caller);
     var nameErr = validateWorkflowName_(data && data.name);
     if (nameErr) return { success: false, error: nameErr };
     var approverErr = validateEmailList_(data.approvers);
     if (approverErr) return { success: false, error: approverErr };
+    var collabErr = validateEmailList_(data.collaborators);
+    if (collabErr) return { success: false, error: '共同編集者: ' + collabErr };
     var urlErr = validateSheetUrl_(data.externalSheet);
     if (urlErr) return { success: false, error: urlErr };
+    // 既存編集は canEdit チェック
+    if (data.id) {
+      var existingWf = getWorkflowById_(data.id);
+      if (existingWf && !canEditWorkflow_(caller, existingWf, callerRole)) {
+        return { success: false, error: 'このワークフローを編集する権限がありません' };
+      }
+    }
     if (!lock.tryLock(30000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     ensureFieldSchema_(ss);
@@ -267,10 +297,12 @@ function api_saveWorkflow(data) {
     var btSheet = ss.getSheetByName(SHEET_BUTTONS);
     if (stSheet.getLastColumn() < 13 || stSheet.getRange(1, 13).getValue() !== '承認者UserID') stSheet.getRange(1, 13).setValue('承認者UserID');
     if (stSheet.getLastColumn() < 14 || stSheet.getRange(1, 14).getValue() !== 'メンション文言') stSheet.getRange(1, 14).setValue('メンション文言');
+    if (stSheet.getLastColumn() < 15 || stSheet.getRange(1, 15).getValue() !== '共同編集者') stSheet.getRange(1, 15).setValue('共同編集者');
     var approverUserIds = String(data.approverUserIds || '').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }).join(',');
     var mentionText = String(data.mentionText || '').trim();
-    // 承認者メールは不可視文字を除去して保存する(承認時の比較ミス防止)
+    // 承認者・共同編集者メールは不可視文字を除去して保存する
     data.approvers = sanitizeEmailList_(data.approvers);
+    var collaboratorsClean = sanitizeEmailList_(data.collaborators);
     var isNew = !data.id, wid, oldName = '';
     var allRows = stSheet.getLastRow() >= 2 ? stSheet.getRange(2, 1, stSheet.getLastRow() - 1, 8).getValues() : [];
     for (var d = 0; d < allRows.length; d++) {
@@ -281,11 +313,11 @@ function api_saveWorkflow(data) {
     if (isNew) {
       wid = 1;
       if (stSheet.getLastRow() >= 2) { stSheet.getRange(2, 1, stSheet.getLastRow() - 1, 1).getValues().forEach(function(r) { if (r[0] >= wid) wid = r[0] + 1; }); }
-      stSheet.appendRow([wid, data.name, data.type, data.execSpace, data.targetSpace, Session.getActiveUser().getEmail(), new Date(), '有効', '', data.approvers || '', data.externalSheet || '', '', approverUserIds, mentionText]);
+      stSheet.appendRow([wid, data.name, data.type, data.execSpace, data.targetSpace, caller, new Date(), '有効', '', data.approvers || '', data.externalSheet || '', '', approverUserIds, mentionText, collaboratorsClean]);
     } else {
       wid = data.id;
       var rows = stSheet.getRange(2, 1, stSheet.getLastRow() - 1, 11).getValues();
-      for (var i = 0; i < rows.length; i++) { if (rows[i][0] === wid) { var rn = i + 2; oldName = rows[i][1]; stSheet.getRange(rn, 2).setValue(data.name); stSheet.getRange(rn, 3).setValue(data.type); stSheet.getRange(rn, 4).setValue(data.execSpace); stSheet.getRange(rn, 5).setValue(data.targetSpace); stSheet.getRange(rn, 10).setValue(data.approvers || ''); stSheet.getRange(rn, 11).setValue(data.externalSheet || ''); stSheet.getRange(rn, 13).setValue(approverUserIds); stSheet.getRange(rn, 14).setValue(mentionText); break; } }
+      for (var i = 0; i < rows.length; i++) { if (rows[i][0] === wid) { var rn = i + 2; oldName = rows[i][1]; stSheet.getRange(rn, 2).setValue(data.name); stSheet.getRange(rn, 3).setValue(data.type); stSheet.getRange(rn, 4).setValue(data.execSpace); stSheet.getRange(rn, 5).setValue(data.targetSpace); stSheet.getRange(rn, 10).setValue(data.approvers || ''); stSheet.getRange(rn, 11).setValue(data.externalSheet || ''); stSheet.getRange(rn, 13).setValue(approverUserIds); stSheet.getRange(rn, 14).setValue(mentionText); stSheet.getRange(rn, 15).setValue(collaboratorsClean); break; } }
     }
 
     // データシートを準備。新規シートは最小ヘッダー(ts/sender/email + status? + messageName)のみで作り、
@@ -456,7 +488,10 @@ function api_previewFieldDiff(payload) {
 function api_deleteWorkflow(wid) {
   var lock = LockService.getScriptLock();
   try {
-    requireAdmin_();
+    var caller = requireAdmin_();
+    var callerRole = getUserRole_(caller);
+    var wfChk = getWorkflowById_(wid);
+    if (wfChk && !canDeleteWorkflow_(caller, wfChk, callerRole)) return { success: false, error: 'このワークフローを削除する権限がありません' };
     if (!lock.tryLock(30000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var st = ss.getSheetByName(SHEET_SETTINGS);
@@ -482,7 +517,10 @@ function api_deleteWorkflow(wid) {
 
 function api_toggleStatus(wid) {
   try {
-    requireAdmin_();
+    var caller = requireAdmin_();
+    var callerRole = getUserRole_(caller);
+    var wfChk = getWorkflowById_(wid);
+    if (wfChk && !canEditWorkflow_(caller, wfChk, callerRole)) return { success: false, error: 'このワークフローの有効/無効を切り替える権限がありません' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheetByName(SHEET_SETTINGS);
     if (sheet.getLastRow() < 2) return { success: false };
@@ -492,22 +530,44 @@ function api_toggleStatus(wid) {
   } catch (err) { Logger.log('api_toggleStatus エラー: ' + err.message); try { notifyAdminOnError_(err, 'api_toggleStatus'); } catch (e2) {} return { success: false, error: err.message }; }
 }
 
+// admins は文字列配列(後方互換) または {email, role} 配列を受け付ける。
+// owner ロールのみ実行可。少なくとも1名 owner を残し、呼び出し元自身を外せない。
 function api_saveAdmins(admins) {
   try {
-    requireAdmin_();
+    var caller = requireAdmin_();
+    var callerRole = getUserRole_(caller);
+    if (!canManageAdmins_(callerRole)) return { success: false, error: 'この操作はオーナー権限が必要です' };
     if (!admins || !Array.isArray(admins) || admins.length === 0) return { success: false, error: '管理者を1人以上指定してください' };
-    // 全角空白/NBSP/ゼロ幅などを除去してから正規化保存する(承認/管理者判定の誤検知防止)
-    var cleaned = admins.map(function(a) { return normalizeEmail_(a); }).filter(function(a) { return a; });
+    var cleaned = admins.map(function(a) {
+      var isObj = a && typeof a === 'object';
+      var email = normalizeEmail_(isObj ? a.email : a);
+      var role = String((isObj && a.role) || ROLE_OWNER).toLowerCase();
+      if (role !== ROLE_EDITOR && role !== ROLE_MEMBER && role !== ROLE_OWNER) role = ROLE_OWNER;
+      return email ? { email: email, role: role } : null;
+    }).filter(function(a) { return a; });
     for (var i = 0; i < cleaned.length; i++) {
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned[i])) return { success: false, error: '不正なメール形式: ' + admins[i] };
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned[i].email)) return { success: false, error: '不正なメール形式: ' + cleaned[i].email };
     }
+    if (!cleaned.some(function(a) { return a.role === ROLE_OWNER; })) return { success: false, error: 'オーナーを最低1名残してください' };
+    var callerNorm = normalizeEmail_(caller);
+    if (!cleaned.some(function(a) { return a.email === callerNorm; })) return { success: false, error: '自分自身を管理者から外すことはできません' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    ensureAdminSchema_(ss);
     var sheet = ss.getSheetByName(SHEET_ADMINS);
-    if (!sheet) { sheet = ss.insertSheet(SHEET_ADMINS); sheet.appendRow(['メールアドレス']); }
-    if (sheet.getLastRow() >= 2) sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).clearContent();
-    cleaned.forEach(function(e, i) { sheet.getRange(i + 2, 1).setValue(e); });
-    admins = cleaned;
-    writeAuditLog_('admins.save', '', admins.join(', '));
+    if (!sheet) { sheet = ss.insertSheet(SHEET_ADMINS); sheet.appendRow(['メールアドレス', '同意日時', '権限']); }
+    // 既存の 同意日時 を保持しつつ書き換える
+    var existing = {};
+    if (sheet.getLastRow() >= 2) {
+      var old = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+      old.forEach(function(r) { var e = normalizeEmail_(r[0]); if (e) existing[e] = r[1] || ''; });
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).clearContent();
+    }
+    cleaned.forEach(function(a, idx) {
+      sheet.getRange(idx + 2, 1).setValue(a.email);
+      sheet.getRange(idx + 2, 2).setValue(existing[a.email] || '');
+      sheet.getRange(idx + 2, 3).setValue(a.role);
+    });
+    writeAuditLog_('admins.save', '', cleaned.map(function(a) { return a.email + '(' + a.role + ')'; }).join(', '));
     try { invalidateAdminCache_(); } catch (e3) {}
     invalidateRenderCache_();
     return { success: true };

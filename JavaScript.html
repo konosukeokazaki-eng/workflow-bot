@@ -8,13 +8,16 @@ var wfEditorTab='basic';
 var COLORS={green:'#34a853',blue:'#1a73e8',yellow:'#f9ab00',orange:'#e65100',red:'#c62828',gray:'#888'};
 var EMOJI={green:'✅',blue:'🔵',yellow:'🟡',orange:'🟠',red:'❌',gray:'⚫'};
 var currentUser=__currentUser||'';
+var currentRole=(typeof __currentRole!=='undefined'&&__currentRole)?__currentRole:'owner';
+function isOwner(){return currentRole==='owner';}
+function isEditorPlus(){return currentRole==='owner'||currentRole==='editor';}
 
 /* ============================================================
    Init
    ============================================================ */
 window.onload=function(){
   try{workflows=__initialData||[];}catch(e){}
-  try{admins=__initialAdmins||[];}catch(e){}
+  try{admins=__initialAdmins||[];_normalizeAdmins();}catch(e){}
   renderList();
   google.script.run.withSuccessHandler(function(d){spaces=d||[];}).withFailureHandler(noop).api_getSpaces();
   google.script.run.withSuccessHandler(function(s){if(s&&!s.accepted)showPrivacyModal();}).withFailureHandler(noop).api_getPrivacyStatus();
@@ -57,7 +60,8 @@ function renderList(){
   el.innerHTML=filtered.map(function(wf){
     var tb=wf.type==='申請・承認'?'<span class="badge badge-approval">承認</span>':'<span class="badge badge-template">定型文</span>';
     var sb=wf.status==='有効'?'<span class="badge badge-active">有効</span>':'<span class="badge badge-inactive">無効</span>';
-    return '<div class="wf-item'+(wf.id===currentWfId?' active':'')+'" onclick="selectWf('+wf.id+')"><div class="wf-item-left"><div class="wf-item-name">'+esc(wf.name)+'</div><div class="wf-item-meta">'+tb+sb+'</div></div><label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" '+(wf.status==='有効'?'checked':'')+' onchange="toggleWf('+wf.id+')"><span class="toggle-slider"></span></label></div>';
+    var toggleHtml=(wf.canEdit===false)?'':'<label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" '+(wf.status==='有効'?'checked':'')+' onchange="toggleWf('+wf.id+')"><span class="toggle-slider"></span></label>';
+    return '<div class="wf-item'+(wf.id===currentWfId?' active':'')+'" onclick="selectWf('+wf.id+')"><div class="wf-item-left"><div class="wf-item-name">'+esc(wf.name)+'</div><div class="wf-item-meta">'+tb+sb+'</div></div>'+toggleHtml+'</div>';
   }).join('');
 }
 function toggleWf(id){run('api_toggleStatus',id,function(r){if(r.success){var w=workflows.find(function(w){return w.id===id});if(w)w.status=r.status;renderList();showToast((r.status==='有効'?'有効':'無効')+'にしました');}});}
@@ -80,7 +84,7 @@ function renderEditor(){
   var spO='<option value="">選択してください</option>'+spaces.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>';}).join('');
   var tab=wfEditorTab||'basic';
   var left='<div class="panel"><h2>'+(wf?esc(wf.name):'新規ワークフロー');
-  if(wf)left+='<div style="display:flex;gap:5px"><button class="btn btn-sm" onclick="deployButton()" style="background:#e8f0fe;color:var(--c-primary)">設置</button><button class="btn btn-sm btn-danger" onclick="deleteWf()">削除</button></div>';
+  if(wf){var _acts='<div style="display:flex;gap:5px">';if(wf.canEdit!==false)_acts+='<button class="btn btn-sm" onclick="deployButton()" style="background:#e8f0fe;color:var(--c-primary)">設置</button>';if(wf.canDelete!==false)_acts+='<button class="btn btn-sm btn-danger" onclick="deleteWf()">削除</button>';_acts+='</div>';left+=_acts;}
   left+='</h2>';
   // Chip nav
   left+='<div class="chip-nav">'
@@ -92,6 +96,7 @@ function renderEditor(){
   left+='<div class="editor-section'+(tab!=='basic'?' hidden':'')+'" id="secBasic">'
     +'<div class="form-row"><div class="form-group"><label>ワークフロー名</label><input type="text" id="wfName" value="'+esc(name)+'" oninput="markDirty();updatePreview()"><div class="error-msg" id="errName">ワークフロー名を入力してください</div></div><div class="form-group"><label>種類</label><select id="wfType" onchange="markDirty();renderEditor()"><option value="申請・承認"'+(type==='申請・承認'?' selected':'')+'>申請・承認</option><option value="定型文送信"'+(type==='定型文送信'?' selected':'')+'>定型文送信</option></select></div></div>'
     +'<div class="form-row"><div class="form-group"><label>実行スペース</label><select id="wfExecSpace" onchange="markDirty()">'+spO+'</select><div class="error-msg" id="errExec">実行スペースを選択してください</div></div><div class="form-group"><label>送信先スペース</label><select id="wfTargetSpace" onchange="markDirty()">'+spO+'</select><div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'
+    +'<div class="form-group"><label>共同編集者（メンバー権限のユーザでもこのワークフローを編集可）</label><input type="text" id="wfCollaborators" value="'+esc(wf?wf.collaborators||'':'')+'" placeholder="カンマ区切りでメール入力（例: a@example.com, b@example.com）" oninput="markDirty()"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">オーナー/エディタは全ワークフロー編集可。メンバーは自分作成分＋この欄に指定された場合のみ編集可。</div></div>'
     +'</div>';
   // Section 2: フォーム項目
   left+='<div class="editor-section'+(tab!=='fields'?' hidden':'')+'" id="secFields">'
@@ -228,6 +233,7 @@ function save(){
     approvers:val('wfApprovers'),
     approverUserIds:val('wfApproverUserIds'),
     mentionText:val('wfMentionText')||'',
+    collaborators:val('wfCollaborators')||'',
     externalSheet:document.getElementById('wfExtCheck')&&document.getElementById('wfExtCheck').checked?val('wfExtSheet'):'',
     fields:currentFields.map(function(f,i){return{fieldId:f.fieldId||'',name:f.name,type:f.type,options:f.options,required:f.required,order:i+1}}),
     buttons:currentButtons.map(function(b,i){return{name:b.name,status:b.status,color:b.color,threadReply:b.threadReply,replyMsg:b.replyMsg,order:i+1}})};
@@ -247,7 +253,7 @@ function doSaveWorkflow(data){
     if(r.error){showToast('エラー: '+r.error);return;}
     isDirty=false;
     var ex=workflows.findIndex(function(w){return w.id===r.id});
-    var nw={id:r.id,name:data.name,type:data.type,execSpace:data.execSpace,targetSpace:data.targetSpace,status:'有効',approvers:data.approvers||'',approverUserIds:data.approverUserIds||'',mentionText:data.mentionText||'',externalSheet:data.externalSheet||''};
+    var nw={id:r.id,name:data.name,type:data.type,execSpace:data.execSpace,targetSpace:data.targetSpace,status:'有効',approvers:data.approvers||'',approverUserIds:data.approverUserIds||'',mentionText:data.mentionText||'',collaborators:data.collaborators||'',externalSheet:data.externalSheet||'',canEdit:true,canDelete:true};
     if(ex>=0)workflows[ex]=nw;else workflows.push(nw);
     currentWfId=r.id;
     // 保存後、フィールドの fieldId をサーバから再取得(次回編集時の差分計算に必要)
@@ -388,15 +394,42 @@ function cancel(){
    Admin Management
    ============================================================ */
 function openMasterSheet(){window.open('https://docs.google.com/spreadsheets/d/1iHLqkdJyCZUP6eivZiMovZvt6kbrWnzTDsTV2O5GUS8','_blank');}
+// admins は [{email, role}] または 旧形式 [email 文字列] を受け付ける。保存直後に正規化する。
+function _normalizeAdmins(){admins=(admins||[]).map(function(a){if(!a)return null;if(typeof a==='string')return{email:a,role:'owner'};return{email:a.email||'',role:a.role||'owner'};}).filter(function(a){return a&&a.email;});}
 function showAdmins(){
+  _normalizeAdmins();
+  var canManage=isOwner();
   var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
-  ov.innerHTML='<div class="modal"><h3>管理者設定</h3><p style="font-size:12px;color:var(--c-text-muted);margin-bottom:12px">管理画面にアクセスできるユーザーを管理します。</p><div id="adminList">'+renderAdminList()+'</div><div class="form-row" style="margin-top:12px"><div class="form-group" style="flex:1;margin:0"><input type="text" id="newAdmin" placeholder="メールアドレスを入力"></div><div><button class="btn btn-primary btn-sm" onclick="addAdmin()" style="height:38px">追加</button></div></div><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">閉じる</button><button class="btn btn-primary" onclick="saveAdmins()">保存</button></div></div>';
+  var hint=canManage?'管理画面にアクセスできるユーザーと権限を管理します。<br><b>オーナー</b>=全操作可(管理者/削除復元含む)、<b>エディタ</b>=全ワークフロー編集可、<b>メンバー</b>=自分作成分＋共同編集者指定分のみ編集可':'管理画面にアクセスできるユーザー一覧です。編集にはオーナー権限が必要です。';
+  var addBox=canManage?'<div class="form-row" style="margin-top:12px"><div class="form-group" style="flex:1;margin:0"><input type="text" id="newAdmin" placeholder="メールアドレスを入力"></div><div class="form-group" style="width:120px;margin:0"><select id="newAdminRole"><option value="owner">オーナー</option><option value="editor" selected>エディタ</option><option value="member">メンバー</option></select></div><div><button class="btn btn-primary btn-sm" onclick="addAdmin()" style="height:38px">追加</button></div></div>':'';
+  var saveBtn=canManage?'<button class="btn btn-primary" onclick="saveAdmins()">保存</button>':'';
+  ov.innerHTML='<div class="modal" style="max-width:560px"><h3>管理者設定</h3><p style="font-size:12px;color:var(--c-text-muted);margin-bottom:12px">'+hint+'</p><div id="adminList">'+renderAdminList()+'</div>'+addBox+'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">閉じる</button>'+saveBtn+'</div></div>';
   document.body.appendChild(ov);
 }
-function renderAdminList(){return admins.map(function(a,i){return '<div class="admin-item">'+esc(a)+(a.toLowerCase()===currentUser.toLowerCase()?'<span style="font-size:11px;color:var(--c-text-muted)">（あなた）</span>':'<button class="btn btn-sm btn-danger" onclick="removeAdmin('+i+')">✕</button>')+'</div>';}).join('');}
-function addAdmin(){var e=document.getElementById('newAdmin').value.trim();if(!e||!e.includes('@'))return;if(admins.indexOf(e)===-1)admins.push(e);document.getElementById('newAdmin').value='';document.getElementById('adminList').innerHTML=renderAdminList();}
+function renderAdminList(){
+  var canManage=isOwner();
+  return admins.map(function(a,i){
+    var isSelf=(a.email||'').toLowerCase()===currentUser.toLowerCase();
+    var roleSelect;
+    if(canManage){
+      roleSelect='<select onchange="changeAdminRole('+i+',this.value)" style="margin-right:6px">'
+        +'<option value="owner"'+(a.role==='owner'?' selected':'')+'>オーナー</option>'
+        +'<option value="editor"'+(a.role==='editor'?' selected':'')+'>エディタ</option>'
+        +'<option value="member"'+(a.role==='member'?' selected':'')+'>メンバー</option>'
+        +'</select>';
+    } else {
+      var lbl={owner:'オーナー',editor:'エディタ',member:'メンバー'}[a.role]||a.role;
+      roleSelect='<span style="font-size:11px;color:var(--c-text-muted);margin-right:6px">['+esc(lbl)+']</span>';
+    }
+    var rmBtn=(canManage&&!isSelf)?'<button class="btn btn-sm btn-danger" onclick="removeAdmin('+i+')">✕</button>':'';
+    var youTag=isSelf?'<span style="font-size:11px;color:var(--c-text-muted);margin-left:6px">（あなた）</span>':'';
+    return '<div class="admin-item" style="display:flex;align-items:center;justify-content:space-between;padding:6px 0"><span>'+esc(a.email)+youTag+'</span><span style="display:flex;align-items:center">'+roleSelect+rmBtn+'</span></div>';
+  }).join('');
+}
+function changeAdminRole(i,r){if(admins[i])admins[i].role=r;}
+function addAdmin(){var e=document.getElementById('newAdmin').value.trim();var r=document.getElementById('newAdminRole').value||'editor';if(!e||!e.includes('@'))return;var exists=admins.some(function(a){return (a.email||'').toLowerCase()===e.toLowerCase();});if(!exists)admins.push({email:e,role:r});document.getElementById('newAdmin').value='';document.getElementById('adminList').innerHTML=renderAdminList();}
 function removeAdmin(i){admins.splice(i,1);document.getElementById('adminList').innerHTML=renderAdminList();}
-function saveAdmins(){showLoading('保存中...');google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){showToast('管理者を保存しました');document.querySelector('.modal-overlay').remove();}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_saveAdmins(admins);}
+function saveAdmins(){if(!isOwner()){showToast('オーナー権限が必要です');return;}showLoading('保存中...');google.script.run.withSuccessHandler(function(r){hideLoading();if(r&&r.success){showToast('管理者を保存しました');var ov=document.querySelector('.modal-overlay');if(ov)ov.remove();}else{showToast('エラー: '+((r&&r.error)||'保存に失敗しました'));}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_saveAdmins(admins);}
 
 /* ============================================================
    Help
