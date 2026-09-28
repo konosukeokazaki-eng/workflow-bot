@@ -18,6 +18,9 @@
       <button class="btn btn-ghost" onclick="showAdmins()">管理者</button>
       <button class="btn btn-ghost" onclick="showArchive()">アーカイブ</button>
       <button class="btn btn-ghost" onclick="showHelp()">ヘルプ</button>
+      <? if (currentRole === 'owner') { ?>
+      <button class="btn btn-ghost" onclick="window.open('https://docs.google.com/document/d/1S8Wx3DaSn1RchOIBPQcKAmM-O_K7UdPrpvF1xWKo06M/edit','_blank')" title="運用マニュアル（オーナーのみ）">運用マニュアル</button>
+      <? } ?>
       <div class="sidebar-meta">
         <span>v<?!= appVersion ?> · <?!= envName ?></span>
       </div>
