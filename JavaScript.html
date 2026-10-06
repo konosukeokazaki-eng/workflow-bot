@@ -19,62 +19,10 @@ window.onload=function(){
   try{workflows=__initialData||[];}catch(e){}
   try{admins=__initialAdmins||[];_normalizeAdmins();}catch(e){}
   renderList();
-  loadSpaces();
+  google.script.run.withSuccessHandler(function(d){spaces=d||[];}).withFailureHandler(noop).api_getSpaces();
   google.script.run.withSuccessHandler(function(s){if(s&&!s.accepted)showPrivacyModal();}).withFailureHandler(noop).api_getPrivacyStatus();
   try{google.script.url.getLocation(function(loc){if(loc&&loc.parameter&&loc.parameter.help==='1'){document.body.classList.add('help-only');setTimeout(showHelp,50);}});}catch(e){}
 };
-/* ============================================================
-   Spaces loader
-   アクセスユーザー自身の Chat スペース一覧を取得する。
-   OAUTH_CLIENT_ID 設定時は GIS でユーザーのトークンを取得して直接 Chat API を叩く。
-   未設定／失敗時はサーバー側 api_getSpaces(デプロイ者権限)にフォールバック。
-   ============================================================ */
-function loadSpaces(){
-  var cid=(typeof __oauthClientId!=='undefined')?__oauthClientId:'';
-  if(!cid){loadSpacesFallback();return;}
-  waitForGIS(function(ok){
-    if(!ok){loadSpacesFallback();return;}
-    try{
-      var tc=google.accounts.oauth2.initTokenClient({
-        client_id:cid,
-        scope:'https://www.googleapis.com/auth/chat.spaces.readonly',
-        prompt:'',
-        hint:currentUser||'',
-        callback:function(resp){
-          if(!resp||!resp.access_token){loadSpacesFallback();return;}
-          fetchSpacesWithToken(resp.access_token);
-        },
-        error_callback:function(){loadSpacesFallback();}
-      });
-      tc.requestAccessToken();
-    }catch(e){loadSpacesFallback();}
-  });
-}
-function waitForGIS(cb){
-  var tries=0;
-  (function tick(){
-    if(window.google&&google.accounts&&google.accounts.oauth2){cb(true);return;}
-    if(++tries>50){cb(false);return;}
-    setTimeout(tick,100);
-  })();
-}
-function fetchSpacesWithToken(tok){
-  var out=[];
-  (function page(pt){
-    var url='https://chat.googleapis.com/v1/spaces?pageSize=200'+(pt?'&pageToken='+encodeURIComponent(pt):'');
-    fetch(url,{headers:{'Authorization':'Bearer '+tok}})
-      .then(function(r){return r.ok?r.json():null;})
-      .then(function(j){
-        if(!j){loadSpacesFallback();return;}
-        (j.spaces||[]).forEach(function(s){var isRoom=(s.spaceType==='SPACE'||s.type==='ROOM');if(isRoom&&s.displayName)out.push({id:s.name,name:s.displayName});});
-        if(j.nextPageToken){page(j.nextPageToken);}else{spaces=out;}
-      })
-      .catch(function(){loadSpacesFallback();});
-  })('');
-}
-function loadSpacesFallback(){
-  google.script.run.withSuccessHandler(function(d){spaces=d||[];}).withFailureHandler(noop).api_getSpaces();
-}
 function showPrivacyModal(){
   var ov=mk('modal-overlay');
   ov.innerHTML=''

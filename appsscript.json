@@ -18,7 +18,7 @@
     "https://www.googleapis.com/auth/directory.readonly"
   ],
   "webapp": {
-    "executeAs": "USER_DEPLOYING",
+    "executeAs": "USER_ACCESSING",
     "access": "ANYONE_ANONYMOUS"
   }
 }
