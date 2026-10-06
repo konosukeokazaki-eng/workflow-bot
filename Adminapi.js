@@ -19,6 +19,9 @@ function getAdminPage_() {
   tpl.appVersion = VERSION;
   tpl.contactEmail = CONTACT_EMAIL;
   tpl.envName = ENV_NAME;
+  // スペース一覧をアクセスユーザー自身の権限で取得するためのクライアント側OAuth用。
+  // スクリプトプロパティ OAUTH_CLIENT_ID が未設定なら従来通りデプロイ者の一覧にフォールバック。
+  tpl.oauthClientId = getConfig_('OAUTH_CLIENT_ID', '');
   // 別タブで開くヘルプ用: 現在の実行URL(@HEADなら/dev, 本番なら/exec)を返す。
   // FUNCTION_URL はChat用の固定バージョンなので、新タブが古いバージョンを開いてしまう。
   try { tpl.selfUrl = ScriptApp.getService().getUrl(); } catch (e) { tpl.selfUrl = FUNCTION_URL; }
