@@ -84,7 +84,14 @@ function renderEditor(){
   // 新規作成中の再レンダー(例: 種類変更時)で入力値が消えないよう、現在のDOM値を保持する。
   var _pt=val('wfType'),_pn=val('wfName'),_pes=val('wfExecSpace'),_pts=val('wfTargetSpace'),_pext=val('wfExtSheet');
   var name=wf?wf.name:(_pn||''),type=wf?wf.type:(_pt||'申請・承認'),es=wf?wf.execSpace:(_pes||''),ts=wf?wf.targetSpace:(_pts||''),extSheet=wf?wf.externalSheet||'':(_pext||'');
-  var spO=spacesLoading?'<option value="">読み込み中...</option>':'<option value="">選択してください</option>'+spaces.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>';}).join('');
+  // スペース数が多いためオートコンプリート方式。表示用<input list>+ 保存用hidden input の構成。
+  var spDl='<datalist id="spDl">'+spaces.map(function(s){return '<option value="'+esc(s.name)+'">';}).join('')+'</datalist>';
+  var spPh=spacesLoading?'読み込み中...':'入力して候補から選択';
+  function _spInput(searchId,hiddenId,curId){
+    var curName='';
+    if(curId){var f=spaces.filter(function(s){return s.id===curId;})[0];if(f)curName=f.name;}
+    return '<input type="text" id="'+searchId+'" list="spDl" placeholder="'+spPh+'" value="'+esc(curName)+'" oninput="onSpaceInput(\''+searchId+'\',\''+hiddenId+'\')"'+(spacesLoading?' disabled':'')+'><input type="hidden" id="'+hiddenId+'" value="'+esc(curId||'')+'">';
+  }
   var tab=wfEditorTab||'basic';
   var left='<div class="panel"><h2>'+(wf?esc(wf.name):'新規ワークフロー');
   if(wf){var _acts='<div style="display:flex;gap:5px">';if(wf.canEdit!==false)_acts+='<button class="btn btn-sm" onclick="deployButton()" style="background:#e8f0fe;color:var(--c-primary)">設置</button>';if(wf.canDelete!==false)_acts+='<button class="btn btn-sm btn-danger" onclick="deleteWf()">削除</button>';_acts+='</div>';left+=_acts;}
@@ -98,7 +105,7 @@ function renderEditor(){
   // Section 1: 基本情報
   left+='<div class="editor-section'+(tab!=='basic'?' hidden':'')+'" id="secBasic">'
     +'<div class="form-row"><div class="form-group"><label>ワークフロー名</label><input type="text" id="wfName" value="'+esc(name)+'" oninput="markDirty();updatePreview()"><div class="error-msg" id="errName">ワークフロー名を入力してください</div></div><div class="form-group"><label>種類</label><select id="wfType" onchange="markDirty();renderEditor()"><option value="申請・承認"'+(type==='申請・承認'?' selected':'')+'>申請・承認</option><option value="定型文送信"'+(type==='定型文送信'?' selected':'')+'>定型文送信</option></select></div></div>'
-    +'<div class="form-row"><div class="form-group"><label>実行スペース</label><select id="wfExecSpace" onchange="markDirty()">'+spO+'</select><div class="error-msg" id="errExec">実行スペースを選択してください</div></div><div class="form-group"><label>送信先スペース</label><select id="wfTargetSpace" onchange="markDirty()">'+spO+'</select><div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'
+    +'<div class="form-row"><div class="form-group"><label>実行スペース</label>'+_spInput('wfExecSpaceSearch','wfExecSpace',es)+'<div class="error-msg" id="errExec">実行スペースを選択してください</div></div><div class="form-group"><label>送信先スペース</label>'+_spInput('wfTargetSpaceSearch','wfTargetSpace',ts)+'<div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'+spDl
     +'<div class="form-group"><label>共同編集者（メンバー権限のユーザでもこのワークフローを編集可）</label><input type="text" id="wfCollaborators" value="'+esc(wf?wf.collaborators||'':'')+'" placeholder="カンマ区切りでメール入力（例: a@example.com, b@example.com）" oninput="markDirty()"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">オーナー/エディタは全ワークフロー編集可。メンバーは自分作成分＋この欄に指定された場合のみ編集可。</div></div>'
     +'</div>';
   // Section 2: フォーム項目
@@ -120,7 +127,7 @@ function renderEditor(){
   if(type==='申請・承認')right+='<div class="panel preview-section"><h2>アクションフロー</h2><div id="previewFlow"></div></div>';
   right+='</div>';
   document.getElementById('mainArea').innerHTML='<div class="main-inner">'+left+right+'</div>';
-  setTimeout(function(){if(es)document.getElementById('wfExecSpace').value=es;if(ts)document.getElementById('wfTargetSpace').value=ts;initSortable();updatePreview();},50);
+  setTimeout(function(){initSortable();updatePreview();},50);
 }
 function setWfTab(t){
   wfEditorTab=t;
@@ -133,6 +140,13 @@ function setWfTab(t){
   if(chips[idx])chips[idx].classList.add('active');
 }
 function markDirty(){isDirty=true;}
+function onSpaceInput(searchId,hiddenId){
+  var name=(document.getElementById(searchId)||{}).value||'';
+  name=String(name).trim();
+  var found=spaces.filter(function(s){return s.name===name;})[0];
+  var h=document.getElementById(hiddenId);if(h)h.value=found?found.id:'';
+  markDirty();
+}
 function initSortable(){
   var fl=document.getElementById('fieldList');if(fl)Sortable.create(fl,{animation:150,ghostClass:'sortable-ghost',chosenClass:'sortable-chosen',handle:'.field-grip',onEnd:function(e){var it=currentFields.splice(e.oldIndex,1)[0];currentFields.splice(e.newIndex,0,it);markDirty();updatePreview();}});
   var bl=document.getElementById('btnList');if(bl)Sortable.create(bl,{animation:150,ghostClass:'sortable-ghost',handle:'.field-grip',onEnd:function(e){var it=currentButtons.splice(e.oldIndex,1)[0];currentButtons.splice(e.newIndex,0,it);markDirty();updatePreview();}});
