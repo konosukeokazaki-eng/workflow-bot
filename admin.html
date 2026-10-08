@@ -14,7 +14,9 @@
     <div class="wf-search"><span class="mi wf-search-icon">search</span><input type="text" id="wfSearch" placeholder="名前で絞り込み" oninput="renderList()"></div>
     <div class="wf-list" id="wfList"></div>
     <div class="sidebar-footer">
-      <button class="btn btn-ghost" onclick="openMasterSheet()">管理データ</button>
+      <? if (currentRole === 'owner') { ?>
+      <button class="btn btn-ghost" onclick="openMasterSheet()" title="管理データ（オーナーのみ）">管理データ</button>
+      <? } ?>
       <button class="btn btn-ghost" onclick="showAdmins()">管理者</button>
       <button class="btn btn-ghost" onclick="showArchive()">アーカイブ</button>
       <button class="btn btn-ghost" onclick="showHelp()">ヘルプ</button>
