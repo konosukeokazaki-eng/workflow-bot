@@ -2,7 +2,7 @@
 /* ============================================================
    State
    ============================================================ */
-var workflows=[], currentWfId=null, currentFields=[], currentButtons=[], spaces=[], admins=[];
+var workflows=[], currentWfId=null, currentFields=[], currentButtons=[], spaces=[], spacesLoading=true, admins=[];
 var isDirty=false;
 var wfEditorTab='basic';
 var COLORS={green:'#34a853',blue:'#1a73e8',yellow:'#f9ab00',orange:'#e65100',red:'#c62828',gray:'#888'};
@@ -19,7 +19,8 @@ window.onload=function(){
   try{workflows=__initialData||[];}catch(e){}
   try{admins=__initialAdmins||[];_normalizeAdmins();}catch(e){}
   renderList();
-  google.script.run.withSuccessHandler(function(d){spaces=d||[];}).withFailureHandler(noop).api_getSpaces();
+  spacesLoading=true;
+  google.script.run.withSuccessHandler(function(d){spaces=d||[];spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).withFailureHandler(function(){spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).api_getSpaces();
   google.script.run.withSuccessHandler(function(s){if(s&&!s.accepted)showPrivacyModal();}).withFailureHandler(noop).api_getPrivacyStatus();
   try{google.script.url.getLocation(function(loc){if(loc&&loc.parameter&&loc.parameter.help==='1'){document.body.classList.add('help-only');setTimeout(showHelp,50);}});}catch(e){}
 };
@@ -83,7 +84,7 @@ function renderEditor(){
   // 新規作成中の再レンダー(例: 種類変更時)で入力値が消えないよう、現在のDOM値を保持する。
   var _pt=val('wfType'),_pn=val('wfName'),_pes=val('wfExecSpace'),_pts=val('wfTargetSpace'),_pext=val('wfExtSheet');
   var name=wf?wf.name:(_pn||''),type=wf?wf.type:(_pt||'申請・承認'),es=wf?wf.execSpace:(_pes||''),ts=wf?wf.targetSpace:(_pts||''),extSheet=wf?wf.externalSheet||'':(_pext||'');
-  var spO='<option value="">選択してください</option>'+spaces.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>';}).join('');
+  var spO=spacesLoading?'<option value="">読み込み中...</option>':'<option value="">選択してください</option>'+spaces.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>';}).join('');
   var tab=wfEditorTab||'basic';
   var left='<div class="panel"><h2>'+(wf?esc(wf.name):'新規ワークフロー');
   if(wf){var _acts='<div style="display:flex;gap:5px">';if(wf.canEdit!==false)_acts+='<button class="btn btn-sm" onclick="deployButton()" style="background:#e8f0fe;color:var(--c-primary)">設置</button>';if(wf.canDelete!==false)_acts+='<button class="btn btn-sm btn-danger" onclick="deleteWf()">削除</button>';_acts+='</div>';left+=_acts;}
