@@ -156,16 +156,30 @@ function validateToken_(token, wid, rowIndex) {
 }
 
 function getServiceAccountToken_() {
+  return getSaToken_('https://www.googleapis.com/auth/chat.bot https://www.googleapis.com/auth/chat.memberships.app', null);
+}
+
+// Domain-Wide Delegation でアクセスユーザーに impersonate したトークンを取得する。
+// 事前にWorkspace管理者がサービスアカウントのクライアントIDに対して指定スコープを許可している必要がある。
+// sub には必ず Session.getActiveUser().getEmail() の結果を渡すこと(外部入力を混入させない)。
+function getImpersonatedToken_(sub, scope) {
+  if (!sub) throw new Error('impersonate対象メール未指定');
+  return getSaToken_(scope, sub);
+}
+
+function getSaToken_(scope, sub) {
   var kj = JSON.parse(PropertiesService.getScriptProperties().getProperty('SERVICE_ACCOUNT_KEY'));
   var h = Utilities.base64EncodeWebSafe(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   var now = Math.floor(Date.now() / 1000);
-  var c = Utilities.base64EncodeWebSafe(JSON.stringify({ iss: kj.client_email, scope: 'https://www.googleapis.com/auth/chat.bot https://www.googleapis.com/auth/chat.memberships.app', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 }));
+  var claims = { iss: kj.client_email, scope: scope, aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 };
+  if (sub) claims.sub = sub;
+  var c = Utilities.base64EncodeWebSafe(JSON.stringify(claims));
   var si = h + '.' + c;
   var sig = Utilities.base64EncodeWebSafe(Utilities.computeRsaSha256Signature(si, kj.private_key));
   var tr = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', { method: 'post', contentType: 'application/x-www-form-urlencoded', payload: 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + si + '.' + sig, muteHttpExceptions: true });
   var td = JSON.parse(tr.getContentText());
   if (td.access_token) return td.access_token;
-  throw new Error('トークン取得失敗');
+  throw new Error('トークン取得失敗: ' + tr.getContentText().substring(0, 300));
 }
 
 function addBotToSpace_(sid) {

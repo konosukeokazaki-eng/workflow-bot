@@ -187,11 +187,27 @@ function api_getWorkflowDetail(wid) {
 
 function api_getSpaces() {
   try {
-    requireAdmin_();
-    var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/spaces', { method: 'get', headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
-    var r = JSON.parse(resp.getContentText());
-    if (!r.spaces) return [];
-    return r.spaces.filter(function(s) { return s.type === 'ROOM' && s.displayName; }).map(function(s) { return { id: s.name, name: s.displayName }; });
+    var caller = requireAdmin_();
+    // Service Account の Domain-Wide Delegation でアクセスユーザーに impersonate し、
+    // そのユーザーが参加しているスペース一覧を取得する。
+    // 失敗時(DWD未設定・スコープ未許可など)は従来のデプロイ者トークンにフォールバック。
+    var token;
+    try { token = getImpersonatedToken_(caller, 'https://www.googleapis.com/auth/chat.spaces.readonly'); }
+    catch (e) { recordDataError_('api_getSpaces.impersonate', e); token = ScriptApp.getOAuthToken(); }
+    var out = [], pageToken = '';
+    do {
+      var url = 'https://chat.googleapis.com/v1/spaces?pageSize=200' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+      var resp = UrlFetchApp.fetch(url, { method: 'get', headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
+      var code = resp.getResponseCode();
+      if (code >= 400) { recordDataError_('api_getSpaces', new Error('HTTP ' + code + ' ' + resp.getContentText().substring(0, 300))); return []; }
+      var r = JSON.parse(resp.getContentText());
+      (r.spaces || []).forEach(function(s) {
+        var isRoom = (s.spaceType === 'SPACE' || s.type === 'ROOM');
+        if (isRoom && s.displayName) out.push({ id: s.name, name: s.displayName });
+      });
+      pageToken = r.nextPageToken || '';
+    } while (pageToken);
+    return out;
   } catch (err) { recordDataError_('api_getSpaces', err); return []; }
 }
 
