@@ -80,7 +80,9 @@ function createNew(){
    ============================================================ */
 function renderEditor(){
   var wf=currentWfId?workflows.find(function(w){return w.id===currentWfId}):null;
-  var name=wf?wf.name:'',type=wf?wf.type:'申請・承認',es=wf?wf.execSpace:'',ts=wf?wf.targetSpace:'',extSheet=wf?wf.externalSheet||'':'';
+  // 新規作成中の再レンダー(例: 種類変更時)で入力値が消えないよう、現在のDOM値を保持する。
+  var _pt=val('wfType'),_pn=val('wfName'),_pes=val('wfExecSpace'),_pts=val('wfTargetSpace'),_pext=val('wfExtSheet');
+  var name=wf?wf.name:(_pn||''),type=wf?wf.type:(_pt||'申請・承認'),es=wf?wf.execSpace:(_pes||''),ts=wf?wf.targetSpace:(_pts||''),extSheet=wf?wf.externalSheet||'':(_pext||'');
   var spO='<option value="">選択してください</option>'+spaces.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>';}).join('');
   var tab=wfEditorTab||'basic';
   var left='<div class="panel"><h2>'+(wf?esc(wf.name):'新規ワークフロー');
