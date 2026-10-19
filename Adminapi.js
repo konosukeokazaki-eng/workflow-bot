@@ -457,9 +457,13 @@ function api_saveWorkflow(data) {
         var vt = verifyBotAccess_(data.targetSpace);
         if (!vt.ok) warnings.push('送信先スペースに Bot が参加していません: ' + vt.error);
       }
-      if (data.execSpace && data.execSpace !== data.targetSpace) {
-        var ve = verifyBotAccess_(data.execSpace);
-        if (!ve.ok) warnings.push('実行スペースに Bot が参加していません: ' + ve.error);
+      if (data.execSpace) {
+        var execList = String(data.execSpace).split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+        execList.forEach(function(sid){
+          if (sid === data.targetSpace) return;
+          var ve = verifyBotAccess_(sid);
+          if (!ve.ok) warnings.push('実行スペース(' + sid + ')に Bot が参加していません: ' + ve.error);
+        });
       }
     } catch (e) { warnings.push('スペース参加状態の確認に失敗: ' + e.message); }
     if (data.externalSheet) {
@@ -638,18 +642,41 @@ function api_deployButton(wid) {
     requireAdmin_();
     var wf = getWorkflowById_(wid);
     if (!wf) return { success: false, error: 'ワークフローが見つかりません' };
-    addBotToSpace_(wf.execSpace);
+    var execList = String(wf.execSpace || '').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+    if (!execList.length) return { success: false, error: '実行スペースが設定されていません' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var st = ss.getSheetByName(SHEET_SETTINGS);
     var rows = st.getRange(2, 1, st.getLastRow() - 1, 11).getValues();
-    for (var i = 0; i < rows.length; i++) { if (rows[i][0] === wid && rows[i][8]) { try { UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + rows[i][8], { method: 'delete', headers: { 'Authorization': 'Bearer ' + getServiceAccountToken_() }, muteHttpExceptions: true }); } catch (e) {} break; } }
+    // 既存のランチャーカード(カンマ区切り複数の場合あり)を全て削除
+    var t = getServiceAccountToken_();
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i][0] === wid && rows[i][8]) {
+        String(rows[i][8]).split(',').map(function(s){return s.trim();}).filter(function(s){return s;}).forEach(function(mn){
+          try { UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + mn, { method: 'delete', headers: { 'Authorization': 'Bearer ' + t }, muteHttpExceptions: true }); } catch (e) {}
+        });
+        break;
+      }
+    }
     var label = (wf.type === '申請・承認') ? '申請する' : '記録する';
     var icon = (wf.type === '申請・承認') ? '📋' : '📝';
-    var t = getServiceAccountToken_();
-    var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + wf.execSpace + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + t }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + wid, card: { header: { title: icon + ' ' + wf.name }, sections: [{ widgets: [{ buttonList: { buttons: [{ text: label, color: COLOR_MAP.blue, onClick: { action: { function: FUNCTION_URL, interaction: 'OPEN_DIALOG', parameters: [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(wid) }] } } }] } }] }] } }] }), muteHttpExceptions: true });
-    var r = JSON.parse(resp.getContentText());
-    if (r.name) { for (var j = 0; j < rows.length; j++) { if (rows[j][0] === wid) { st.getRange(j + 2, 9).setValue(r.name); break; } } writeAuditLog_('workflow.deploy', 'wid=' + wid, wf.name); return { success: true }; }
-    return { success: false, error: resp.getContentText() };
+    var postedNames = [];
+    var errors = [];
+    execList.forEach(function(sid){
+      try { addBotToSpace_(sid); } catch (e) {}
+      try {
+        var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sid + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + t }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + wid, card: { header: { title: icon + ' ' + wf.name }, sections: [{ widgets: [{ buttonList: { buttons: [{ text: label, color: COLOR_MAP.blue, onClick: { action: { function: FUNCTION_URL, interaction: 'OPEN_DIALOG', parameters: [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(wid) }] } } }] } }] }] } }] }), muteHttpExceptions: true });
+        var r = JSON.parse(resp.getContentText());
+        if (r.name) postedNames.push(r.name);
+        else errors.push(sid + ': ' + resp.getContentText());
+      } catch (e) { errors.push(sid + ': ' + e.message); }
+    });
+    if (postedNames.length) {
+      for (var j = 0; j < rows.length; j++) { if (rows[j][0] === wid) { st.getRange(j + 2, 9).setValue(postedNames.join(',')); break; } }
+      writeAuditLog_('workflow.deploy', 'wid=' + wid, wf.name + ' (' + postedNames.length + '/' + execList.length + ')');
+      if (errors.length) return { success: true, warning: '一部スペースへの投稿に失敗: ' + errors.join(' / ') };
+      return { success: true };
+    }
+    return { success: false, error: errors.join(' / ') || '投稿に失敗しました' };
   } catch (err) { Logger.log('api_deployButton エラー: ' + err.message); try { notifyAdminOnError_(err, 'api_deployButton'); } catch (e2) {} return { success: false, error: err.message }; }
 }
 

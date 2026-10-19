@@ -164,6 +164,12 @@ body { font-family:var(--font); background:var(--c-bg); color:var(--c-text); fon
 .toggle input:checked+.toggle-slider { background:var(--c-primary); border-color:var(--c-primary); }
 .toggle input:checked+.toggle-slider:before { transform:translate(20px, -50%); width:18px; height:18px; background:#fff; }
 
+.sp-chip-box { display:flex; flex-wrap:wrap; gap:6px; min-height:28px; padding:6px; border:1px solid var(--c-border,#dadce0); border-radius:8px; background:var(--c-bg-alt,#f7f7f8); }
+.sp-chip-box:empty:before { content:'未選択'; color:var(--c-text-faint); font-size:12px; }
+.sp-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; background:var(--c-primary-container,#e8f0fe); color:var(--c-primary,#1a73e8); border-radius:12px; font-size:12px; }
+.sp-chip-x { cursor:pointer; font-weight:bold; opacity:0.7; padding:0 2px; }
+.sp-chip-x:hover { opacity:1; }
+
 /* ============================================================
    Forms - M3 outlined text fields
    ============================================================ */

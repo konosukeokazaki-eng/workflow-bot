@@ -92,6 +92,16 @@ function renderEditor(){
     if(curId){var f=spaces.filter(function(s){return s.id===curId;})[0];if(f)curName=f.name;}
     return '<input type="text" id="'+searchId+'" list="spDl" placeholder="'+spPh+'" value="'+esc(curName)+'" oninput="onSpaceInput(\''+searchId+'\',\''+hiddenId+'\')"'+(spacesLoading?' disabled':'')+'><input type="hidden" id="'+hiddenId+'" value="'+esc(curId||'')+'">';
   }
+  // 複数選択用: チップ表示 + 入力 + 追加ボタン。hidden input にはカンマ区切りで ID を保存。
+  function _spMultiInput(hiddenId,curIdsStr){
+    var ids=String(curIdsStr||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+    var chips=ids.map(function(id){var f=spaces.filter(function(s){return s.id===id;})[0];var nm=f?f.name:id;return '<span class="sp-chip" data-id="'+esc(id)+'">'+esc(nm)+'<span class="sp-chip-x" onclick="removeExecSpace(\''+esc(id)+'\')">×</span></span>';}).join('');
+    var searchId=hiddenId+'Search';
+    return '<div class="sp-chip-box" id="'+hiddenId+'Chips">'+chips+'</div>'
+      +'<div style="display:flex;gap:6px;margin-top:6px"><input type="text" id="'+searchId+'" list="spDl" placeholder="'+spPh+'" '+(spacesLoading?'disabled':'')+' onkeydown="if(event.key===\'Enter\'){event.preventDefault();addExecSpace();}" style="flex:1">'
+      +'<button type="button" class="btn btn-sm" onclick="addExecSpace()">追加</button></div>'
+      +'<input type="hidden" id="'+hiddenId+'" value="'+esc(ids.join(','))+'">';
+  }
   var tab=wfEditorTab||'basic';
   var left='<div class="panel"><h2>'+(wf?esc(wf.name):'新規ワークフロー');
   if(wf){var _acts='<div style="display:flex;gap:5px">';if(wf.canEdit!==false)_acts+='<button class="btn btn-sm" onclick="deployButton()" style="background:#e8f0fe;color:var(--c-primary)">設置</button>';if(wf.canDelete!==false)_acts+='<button class="btn btn-sm btn-danger" onclick="deleteWf()">削除</button>';_acts+='</div>';left+=_acts;}
@@ -105,7 +115,7 @@ function renderEditor(){
   // Section 1: 基本情報
   left+='<div class="editor-section'+(tab!=='basic'?' hidden':'')+'" id="secBasic">'
     +'<div class="form-row"><div class="form-group"><label>ワークフロー名</label><input type="text" id="wfName" value="'+esc(name)+'" oninput="markDirty();updatePreview()"><div class="error-msg" id="errName">ワークフロー名を入力してください</div></div><div class="form-group"><label>種類</label><select id="wfType" onchange="markDirty();renderEditor()"><option value="申請・承認"'+(type==='申請・承認'?' selected':'')+'>申請・承認</option><option value="定型文送信"'+(type==='定型文送信'?' selected':'')+'>定型文送信</option></select></div></div>'
-    +'<div class="form-row"><div class="form-group"><label>実行スペース</label>'+_spInput('wfExecSpaceSearch','wfExecSpace',es)+'<div class="error-msg" id="errExec">実行スペースを選択してください</div></div><div class="form-group"><label>送信先スペース</label>'+_spInput('wfTargetSpaceSearch','wfTargetSpace',ts)+'<div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'+spDl
+    +'<div class="form-row"><div class="form-group"><label>実行スペース（複数選択可）</label>'+_spMultiInput('wfExecSpace',es)+'<div class="error-msg" id="errExec">実行スペースを1つ以上選択してください</div></div><div class="form-group"><label>送信先スペース（任意）</label>'+_spInput('wfTargetSpaceSearch','wfTargetSpace',ts)+'<div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">空欄なら申請ボタンが押された実行スペースに送信されます。</div><div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'+spDl
     +'<div class="form-group"><label>共同編集者（メンバー権限のユーザでもこのワークフローを編集可）</label><input type="text" id="wfCollaborators" value="'+esc(wf?wf.collaborators||'':'')+'" placeholder="カンマ区切りでメール入力（例: a@example.com, b@example.com）" oninput="markDirty()"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">オーナー/エディタは全ワークフロー編集可。メンバーは自分作成分＋この欄に指定された場合のみ編集可。</div></div>'
     +'</div>';
   // Section 2: フォーム項目
@@ -145,6 +155,26 @@ function onSpaceInput(searchId,hiddenId){
   name=String(name).trim();
   var found=spaces.filter(function(s){return s.name===name;})[0];
   var h=document.getElementById(hiddenId);if(h)h.value=found?found.id:'';
+  markDirty();
+}
+function addExecSpace(){
+  var inp=document.getElementById('wfExecSpaceSearch');if(!inp)return;
+  var name=String(inp.value||'').trim();if(!name)return;
+  var found=spaces.filter(function(s){return s.name===name;})[0];
+  if(!found){showToast('候補からスペースを選んでください');return;}
+  var h=document.getElementById('wfExecSpace');var cur=String(h.value||'').split(',').filter(function(s){return s;});
+  if(cur.indexOf(found.id)!==-1){showToast('既に追加されています');return;}
+  cur.push(found.id);h.value=cur.join(',');
+  var chipsEl=document.getElementById('wfExecSpaceChips');
+  chipsEl.insertAdjacentHTML('beforeend','<span class="sp-chip" data-id="'+esc(found.id)+'">'+esc(found.name)+'<span class="sp-chip-x" onclick="removeExecSpace(\''+esc(found.id)+'\')">×</span></span>');
+  inp.value='';markDirty();hideError('errExec');
+}
+function removeExecSpace(id){
+  var h=document.getElementById('wfExecSpace');var cur=String(h.value||'').split(',').filter(function(s){return s&&s!==id;});
+  h.value=cur.join(',');
+  var chipsEl=document.getElementById('wfExecSpaceChips');
+  var chips=chipsEl.querySelectorAll('.sp-chip');
+  for(var i=0;i<chips.length;i++){if(chips[i].getAttribute('data-id')===id){chips[i].remove();break;}}
   markDirty();
 }
 function initSortable(){
@@ -235,7 +265,7 @@ function save(){
   var errBasic=false,errFieldsSec=false;
   if(!val('wfName')){showError('errName');errBasic=true;}else hideError('errName');
   if(!val('wfExecSpace')){showError('errExec');errBasic=true;}else hideError('errExec');
-  if(!val('wfTargetSpace')){showError('errTarget');errBasic=true;}else hideError('errTarget');
+  hideError('errTarget');
   if(!currentFields.length){showError('errFields');errFieldsSec=true;}else hideError('errFields');
   var dBasic=document.getElementById('dotBasic'),dFields=document.getElementById('dotFields'),dNotify=document.getElementById('dotNotify');
   if(dBasic)dBasic.style.display=errBasic?'':'none';
@@ -316,7 +346,11 @@ function showFieldDiffConfirm(diff, onOk){
    ============================================================ */
 function openApproverPicker(){
   var ts=val('wfTargetSpace');
-  if(!ts){showToast('先に送信先スペースを選択してください');return;}
+  if(!ts){
+    var es=String(val('wfExecSpace')||'').split(',').filter(function(s){return s;});
+    if(es.length){ts=es[0];}
+  }
+  if(!ts){showToast('先に実行スペース or 送信先スペースを選択してください');return;}
   var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
   ov.innerHTML='<div class="modal" style="max-width:520px"><h3>メンバーから承認者を選択</h3>'
     +'<p style="font-size:12px;color:var(--c-text-muted);margin:8px 0">送信先スペースのメンバーから選択できます。選択した相手には申請投稿時に @メンション通知が飛びます。</p>'

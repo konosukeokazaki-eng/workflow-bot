@@ -6,7 +6,7 @@ function handleApplyCommand_(event) {
   var workflows = getActiveWorkflows_();
   var currentSpace = '';
   if (event.chat && event.chat.appCommandPayload && event.chat.appCommandPayload.space) currentSpace = event.chat.appCommandPayload.space.name || '';
-  if (currentSpace) workflows = workflows.filter(function(wf) { return wf.execSpace === currentSpace; });
+  if (currentSpace) workflows = workflows.filter(function(wf) { return String(wf.execSpace || '').split(',').map(function(s){return s.trim();}).indexOf(currentSpace) !== -1; });
   if (workflows.length === 0) return { action: { navigations: [{ pushCard: { header: { title: 'ワークフロー' }, sections: [{ widgets: [{ textParagraph: { text: 'このスペースに紐づいたワークフローはありません。' } }] }] } }] } };
   if (workflows.length === 1) return buildWorkflowDialog_(workflows[0].id);
   var items = workflows.map(function(wf) { return { text: wf.name, value: String(wf.id), selected: false }; });
@@ -70,6 +70,12 @@ function handleSubmitWorkflow_(event) {
   var fields = getWorkflowFields_(workflowId);
   var senderName = '', senderEmail = '';
   if (event.chat && event.chat.user) { senderName = event.chat.user.displayName || ''; senderEmail = event.chat.user.email || ''; }
+  // 送信先スペース未設定時のために、ボタンが押された実行スペースを特定する。
+  var currentSpace = '';
+  if (event.chat) {
+    if (event.chat.buttonClickedPayload && event.chat.buttonClickedPayload.space) currentSpace = event.chat.buttonClickedPayload.space.name || '';
+    else if (event.chat.appCommandPayload && event.chat.appCommandPayload.space) currentSpace = event.chat.appCommandPayload.space.name || '';
+  }
   var values = {}, errors = [];
   fields.forEach(function(f) { var v = getInputValue_(inputs, 'field_' + f.order); values[f.name] = v; if (f.required && !String(v).trim()) errors.push(f.name); });
   if (errors.length > 0) return buildWorkflowDialogCard_(workflowId, values, errors, 'update');
@@ -109,15 +115,16 @@ function handleSubmitWorkflow_(event) {
     var rowIndex = dataSheet.getLastRow();
     var headers = headerRow.slice();
     writeToExternalSheet_(wf, { headers: headers, values: row.slice(0, msgIdx >= 0 ? msgIdx : row.length) });
-    if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex);
-    else sendInfoCard_(wf, fields, values, senderName);
+    var destSpace = wf.targetSpace || currentSpace;
+    if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace);
+    else sendInfoCard_(wf, fields, values, senderName, destSpace);
     return { action: { navigations: [{ endNavigation: { action: 'CLOSE_DIALOG' } }], notification: { text: '✅ 送信しました（' + wf.name + '）' } } };
   } finally {
     try { lock.releaseLock(); } catch (e) {}
   }
 }
 
-function sendApprovalCard_(wf, fields, values, senderName, rowIndex) {
+function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace) {
   var widgets = [];
   widgets.push({ decoratedText: { topLabel: '送信者', text: senderName } });
   fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)' } }); });
@@ -144,19 +151,23 @@ function sendApprovalCard_(wf, fields, values, senderName, rowIndex) {
     var token = getServiceAccountToken_();
     var payload = { cardsV2: [{ cardId: 'approval_' + wf.id + '_' + rowIndex, card: { header: { title: '🔔 新しい申請', subtitle: wf.name + ' - ' + senderName }, sections: [{ header: '申請内容', widgets: widgets }] } }] };
     if (mentionText) payload.text = mentionText;
-    var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + wf.targetSpace + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+    var sendTo = destSpace || wf.targetSpace;
+    if (!sendTo) throw new Error('送信先スペースが特定できません');
+    var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sendTo + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
     var result = JSON.parse(resp.getContentText());
     if (result.name) { SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(wf.name).getRange(rowIndex, SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(wf.name).getLastColumn()).setValue(result.name); }
   } catch (err) { Logger.log('カード送信エラー: ' + err.message); }
 }
 
-function sendInfoCard_(wf, fields, values, senderName) {
+function sendInfoCard_(wf, fields, values, senderName, destSpace) {
   try {
     var widgets = [];
     widgets.push({ decoratedText: { topLabel: '送信者', text: senderName } });
     fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)' } }); });
+    var sendTo = destSpace || wf.targetSpace;
+    if (!sendTo) throw new Error('送信先スペースが特定できません');
     var token = getServiceAccountToken_();
-    UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + wf.targetSpace + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ cardsV2: [{ cardId: 'info_' + wf.id + '_' + Date.now(), card: { header: { title: '📝 ' + wf.name, subtitle: senderName }, sections: [{ widgets: widgets }] } }] }), muteHttpExceptions: true });
+    UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sendTo + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ cardsV2: [{ cardId: 'info_' + wf.id + '_' + Date.now(), card: { header: { title: '📝 ' + wf.name, subtitle: senderName }, sections: [{ widgets: widgets }] } }] }), muteHttpExceptions: true });
   } catch (err) { Logger.log('定型文送信エラー: ' + err.message); }
 }
 
@@ -200,7 +211,11 @@ function handleApproval_(e) {
     updateExternalSheet_(wf, wf.name, rowIndex, statusCol, newStatus);
     var messageName = msgCol > 0 ? sheet.getRange(rowIndex, msgCol).getValue() : '';
     if (messageName) updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicantName, newStatus, emoji, headers);
-    if (btn.threadReply && btn.replyMsg && messageName) sendThreadReply_(wf.targetSpace, messageName, btn.replyMsg, applicantName, newStatus);
+    if (btn.threadReply && btn.replyMsg && messageName) {
+      // 送信先が空(=実行スペース返信)でも、messageName からスペースを抽出して返信先を特定する。
+      var replySpace = wf.targetSpace || (String(messageName).split('/messages/')[0] || '');
+      sendThreadReply_(replySpace, messageName, btn.replyMsg, applicantName, newStatus);
+    }
     writeAuditLog_('approval.' + (newStatus === '承認' ? 'approve' : 'decide'), 'wid=' + workflowId + ' row=' + rowIndex, newStatus + '/' + applicantName + (tokenCheck.legacy ? ' [legacy-token]' : ''));
     try { incrementDailyCounter_('approval', 1); } catch (e4) {}
     return htmlPage_(emoji, newStatus, applicantName + ' の申請を「' + newStatus + '」にしました', htmlColor);
