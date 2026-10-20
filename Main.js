@@ -38,33 +38,48 @@ var COLOR_MAP = {
   gray:   { red: 0.5, green: 0.5, blue: 0.5, alpha: 1 }
 };
 
-function doPost(e) {
-  var event = JSON.parse(e.postData.contents);
-  Logger.log('EVENT: ' + JSON.stringify(event).substring(0, 1000));
-  var result = {};
+// Chat API 接続方式(HTTP or Apps Script)の両方に対応できるよう、
+// doPost で受けた Chat イベントを分岐する内部関数と、Apps Script ネイティブトリガー関数を併設する。
+function dispatchChatEvent_(event) {
   try {
     if (event.chat && event.chat.appCommandPayload) {
-      var cmdId = event.chat.appCommandPayload.appCommandMetadata.appCommandId;
-      if (cmdId === 1 || cmdId === '1') result = handleApplyCommand_(event);
-      else result = createMessage_('不明なコマンドです。');
+      var cmdId = event.chat.appCommandPayload.appCommandMetadata && event.chat.appCommandPayload.appCommandMetadata.appCommandId;
+      if (cmdId === 1 || cmdId === '1') return handleApplyCommand_(event);
+      return createMessage_('不明なコマンドです。');
     } else if (event.chat && event.chat.buttonClickedPayload) {
       var actionName = '';
       if (event.commonEventObject && event.commonEventObject.parameters) actionName = event.commonEventObject.parameters.actionName || '';
       switch (actionName) {
-        case 'openWorkflow': result = openWorkflowDialog_(event); break;
-        case 'submitWorkflow': result = handleSubmitWorkflow_(event); break;
-        default: result = createMessage_('不明なアクションです: ' + actionName);
+        case 'openWorkflow': return openWorkflowDialog_(event);
+        case 'submitWorkflow': return handleSubmitWorkflow_(event);
+        default: return createMessage_('不明なアクションです: ' + actionName);
       }
-    } else {
-      result = createMessage_('ワークフローを実行するにはボタンを押すか、/apply コマンドを使ってください。');
+    } else if (event.chat && event.chat.messagePayload) {
+      return createMessage_('ワークフローを実行するにはボタンを押すか、/apply コマンドを使ってください。');
+    } else if (event.chat && event.chat.addedToSpacePayload) {
+      return createMessage_('Workflow Bot を追加いただきありがとうございます。/apply コマンドでワークフローを実行できます。');
     }
+    return createMessage_('ワークフローを実行するにはボタンを押すか、/apply コマンドを使ってください。');
   } catch (err) {
     Logger.log('ERROR: ' + err.message + '\n' + err.stack);
-    try { notifyAdminOnError_(err, 'doPost'); } catch (e) {}
-    result = createMessage_('エラーが発生しました。管理者に連絡してください: ' + CONTACT_EMAIL);
+    try { notifyAdminOnError_(err, 'dispatchChatEvent_'); } catch (e) {}
+    return createMessage_('エラーが発生しました。管理者に連絡してください: ' + CONTACT_EMAIL);
   }
+}
+
+function doPost(e) {
+  var event = JSON.parse(e.postData.contents);
+  Logger.log('EVENT: ' + JSON.stringify(event).substring(0, 1000));
+  var result = dispatchChatEvent_(event);
   return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
 }
+
+// Apps Script ネイティブ Chat トリガー (Chat API 接続が「Apps Script」の場合に呼ばれる)
+function onAppCommand(event) { Logger.log('onAppCommand'); return dispatchChatEvent_(event); }
+function onCardClick(event)  { Logger.log('onCardClick');  return dispatchChatEvent_(event); }
+function onMessage(event)    { Logger.log('onMessage');    return dispatchChatEvent_(event); }
+function onAddedToSpace(event) { Logger.log('onAddedToSpace'); return dispatchChatEvent_(event); }
+function onRemovedFromSpace(event) { Logger.log('onRemovedFromSpace'); return {}; }
 
 function doGet(e) {
   if (e.parameter.ping === '1') return healthCheck_();
