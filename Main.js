@@ -2,7 +2,7 @@
 // Main.gs - 定数 + doPost + doGet + ルーティング
 // ============================================================
 
-var VERSION = '1.5.14';
+var VERSION = '1.5.15';
 
 var SHEET_SETTINGS   = '_設定';
 var SHEET_FIELDS     = '_項目設定';
@@ -89,8 +89,7 @@ function toAppsScriptResponse_(response) {
     var nav = response.action.navigations[0];
     if (nav.pushCard || nav.updateCard) {
       var card = nav.pushCard || nav.updateCard;
-      var type = nav.updateCard ? 'UPDATE_DIALOG' : 'DIALOG';
-      return { actionResponse: { type: type, dialogAction: { dialog: { body: card } } } };
+      return { actionResponse: { type: 'DIALOG', dialogAction: { dialog: { body: card } } } };
     }
   }
   if (response.hostAppDataAction && response.hostAppDataAction.chatDataAction) {
@@ -99,10 +98,11 @@ function toAppsScriptResponse_(response) {
   }
   return response;
 }
-function onAppCommand(event) { Logger.log('onAppCommand'); return toAppsScriptResponse_(dispatchChatEvent_(event)); }
-function onCardClick(event)  { Logger.log('onCardClick');  return toAppsScriptResponse_(dispatchChatEvent_(event)); }
-function onMessage(event)    { Logger.log('onMessage');    return toAppsScriptResponse_(dispatchChatEvent_(event)); }
-function onAddedToSpace(event) { Logger.log('onAddedToSpace'); return toAppsScriptResponse_(dispatchChatEvent_(event)); }
+function logEvent_(name, event) { try { Logger.log(name + ' EVENT: ' + JSON.stringify(event).substring(0, 2000)); } catch (e) {} }
+function onAppCommand(event) { logEvent_('onAppCommand', event); var r = toAppsScriptResponse_(dispatchChatEvent_(event)); Logger.log('onAppCommand RESP: ' + JSON.stringify(r).substring(0,1500)); return r; }
+function onCardClick(event)  { logEvent_('onCardClick', event);  return toAppsScriptResponse_(dispatchChatEvent_(event)); }
+function onMessage(event)    { logEvent_('onMessage', event);    return toAppsScriptResponse_(dispatchChatEvent_(event)); }
+function onAddedToSpace(event) { logEvent_('onAddedToSpace', event); return toAppsScriptResponse_(dispatchChatEvent_(event)); }
 function onRemovedFromSpace(event) { Logger.log('onRemovedFromSpace'); return {}; }
 
 function doGet(e) {
