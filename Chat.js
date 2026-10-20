@@ -204,7 +204,7 @@ function handleSubmitWorkflow_(event) {
 function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, chain, inheritFrom) {
   var widgets = [];
   widgets.push({ decoratedText: { topLabel: '送信者', text: senderName } });
-  fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)' } }); });
+  fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)', wrapText: true } }); });
   widgets.push({ decoratedText: { topLabel: 'ステータス', text: '⏳ 承認待ち' } });
   var buttons = getWorkflowButtons_(wf.id);
   if (buttons.length === 0) buttons = [{ name: '承認', status: '承認', color: 'green' }, { name: '却下', status: '却下', color: 'red' }];
@@ -269,7 +269,7 @@ function sendInfoCard_(wf, fields, values, senderName, destSpace, inheritFrom) {
   try {
     var widgets = [];
     widgets.push({ decoratedText: { topLabel: '送信者', text: senderName } });
-    fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)' } }); });
+    fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)', wrapText: true } }); });
     var sendTo = destSpace || wf.targetSpace;
     var payload = { cardsV2: [{ cardId: 'info_' + wf.id + '_' + Date.now(), card: { header: { title: '📝 ' + wf.name, subtitle: senderName }, sections: [{ widgets: widgets }] } }] };
     var urlSuffix = '';
@@ -395,7 +395,7 @@ function updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicant
   fields.forEach(function(f) {
     var col = -1;
     for (var c = 0; c < headers.length; c++) { if (headers[c] === f.name) { col = c + 1; break; } }
-    widgets.push({ decoratedText: { topLabel: f.name, text: String(col > 0 ? sheet.getRange(rowIndex, col).getValue() : '') || '(なし)' } });
+    widgets.push({ decoratedText: { topLabel: f.name, text: String(col > 0 ? sheet.getRange(rowIndex, col).getValue() : '') || '(なし)', wrapText: true } });
   });
   widgets.push({ decoratedText: { topLabel: 'ステータス', text: emoji + ' ' + newStatus } });
   try {
