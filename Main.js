@@ -2,7 +2,7 @@
 // Main.gs - 定数 + doPost + doGet + ルーティング
 // ============================================================
 
-var VERSION = '1.5.26';
+var VERSION = '1.5.27';
 
 var SHEET_SETTINGS   = '_設定';
 var SHEET_FIELDS     = '_項目設定';

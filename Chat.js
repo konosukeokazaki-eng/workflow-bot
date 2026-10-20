@@ -358,18 +358,28 @@ function handleApproval_(e) {
     if (statusCol === -1) return htmlPage_('⚠️', 'エラー', 'ステータス列が見つかりません', '#666');
     var currentStatus = sheet.getRange(rowIndex, statusCol).getValue();
     if (currentStatus !== '承認待ち') return htmlPage_('⚠️', '処理済み', 'この申請は既に「' + currentStatus + '」されています', '#666');
-    var currentUser = normalizeEmail_(Session.getActiveUser().getEmail());
-    if (wf.approvers) {
-      var approverList = wf.approvers.split(',').map(function(a) { return normalizeEmail_(a); });
-      if (!currentUser || approverList.indexOf(currentUser) === -1) return htmlPage_('🚫', '権限がありません', '', '#666');
-    } else {
-      // 承認者未設定の過去ワークフローは管理者のみに制限(新規保存は承認者必須のため、ここに来るのは旧データのみ)
-      if (!currentUser || !isAdmin_(currentUser)) return htmlPage_('🚫', '権限がありません', '承認者が設定されていません。管理画面でワークフローに承認者を設定してください。', '#666');
+    var rawEmail = '';
+    try { rawEmail = Session.getActiveUser().getEmail() || ''; } catch (eA) { Logger.log('getActiveUser throw: ' + eA.message); }
+    var currentUser = normalizeEmail_(rawEmail);
+    Logger.log('handleApproval auth check wid=' + workflowId + ' row=' + rowIndex + ' rawEmail=' + rawEmail + ' approvers=' + wf.approvers + ' statusCol=' + statusCol);
+    var approverList = String(wf.approvers || '').split(',').map(function(a) { return normalizeEmail_(a); }).filter(function(a) { return a; });
+    if (!currentUser) {
+      return htmlPage_('🚫', '権限がありません', 'ログイン情報を取得できませんでした。別アカウントでGoogleにログイン中の可能性があります。', '#666');
+    }
+    if (approverList.length === 0) {
+      return htmlPage_('🚫', '承認者未設定', 'このワークフローには承認者が設定されていません。管理画面で承認者を追加してください。', '#666');
+    }
+    if (approverList.indexOf(currentUser) === -1) {
+      Logger.log('approval rejected: ' + currentUser + ' not in [' + approverList.join(',') + ']');
+      return htmlPage_('🚫', '権限がありません', 'このワークフローの承認者ではありません(' + currentUser + ')', '#666');
     }
     sheet.getRange(rowIndex, statusCol).setValue(newStatus);
     SpreadsheetApp.flush();
     var writeBack = sheet.getRange(rowIndex, statusCol).getValue();
-    Logger.log('approval setValue row=' + rowIndex + ' expected=' + newStatus + ' actual=' + writeBack);
+    Logger.log('approval setValue row=' + rowIndex + ' col=' + statusCol + ' expected=' + newStatus + ' actual=' + writeBack);
+    if (String(writeBack) !== String(newStatus)) {
+      try { notifyAdminOnError_(new Error('setValue readback mismatch expected=' + newStatus + ' actual=' + writeBack), 'handleApproval_'); } catch (eN) {}
+    }
     updateExternalSheet_(wf, wf.name, rowIndex, statusCol, newStatus);
     var messageName = msgCol > 0 ? sheet.getRange(rowIndex, msgCol).getValue() : '';
     if (messageName) updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicantName, newStatus, emoji, headers);
