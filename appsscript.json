@@ -4,6 +4,13 @@
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
   "chat": {},
+  "addOns": {
+    "common": {
+      "name": "Workflow Bot",
+      "logoUrl": "https://www.gstatic.com/images/branding/product/1x/chat_48dp.png"
+    },
+    "chat": {}
+  },
   "oauthScopes": [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/chat.spaces.readonly",
