@@ -2,6 +2,13 @@
 // Chat.gs - Google Chat 連携（コマンド、カード送信、承認処理）
 // ============================================================
 
+// 数量付きチェックボックスの options を "<選択肢>###<qtype>###<数量候補>" から構造体に分解する。
+function parseQtyOptions_(raw) {
+  var s = String(raw || '');
+  var parts = s.split('###');
+  return { opts: parts[0] || '', qtype: parts[1] || 'number', qopts: parts[2] || '' };
+}
+
 function handleApplyCommand_(event) {
   var workflows = getActiveWorkflows_();
   var currentSpace = '';
@@ -52,6 +59,25 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode) {
         if (pv) { var pd = new Date(pv); if (!isNaN(pd.getTime())) dp.valueMsEpoch = pd.getTime(); }
         widgets.push({ dateTimePicker: dp });
         break;
+      case 'checkbox_qty':
+        var qp = parseQtyOptions_(f.options);
+        var qItems = qp.opts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+        var pvMap = {};
+        if (pv) { String(pv).split(',').forEach(function(seg){ var m = seg.match(/^\s*(.+?)\s*×\s*(\S+)\s*$/); if (m) pvMap[m[1]] = m[2]; }); }
+        widgets.push({ textParagraph: { text: '<b>' + label + '</b>（数量を入力/選択。空欄や0は未選択）' } });
+        qItems.forEach(function(itemName, oi) {
+          var key = 'field_' + f.order + '_q_' + oi;
+          var curVal = pvMap[itemName] || '';
+          if (qp.qtype === 'dropdown') {
+            var qopts = qp.qopts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+            var items = [{ text: '未選択', value: '', selected: !curVal }];
+            qopts.forEach(function(q){ items.push({ text: q, value: q, selected: curVal === q }); });
+            widgets.push({ selectionInput: { label: itemName, name: key, type: 'DROPDOWN', items: items } });
+          } else {
+            widgets.push({ textInput: { label: itemName, name: key, type: 'SINGLE_LINE', value: curVal, hintText: '数量（空欄=未選択）' } });
+          }
+        });
+        break;
     }
   });
   widgets.push({ buttonList: { buttons: [{ text: '送信', onClick: { action: { function: cardActionFunc_(), parameters: [{ key: 'actionName', value: 'submitWorkflow' }, { key: 'workflowId', value: String(workflowId) }] } } }] } });
@@ -79,7 +105,23 @@ function handleSubmitWorkflow_(event) {
     else if (event.chat.appCommandPayload && event.chat.appCommandPayload.space) currentSpace = event.chat.appCommandPayload.space.name || '';
   }
   var values = {}, errors = [];
-  fields.forEach(function(f) { var v = getInputValue_(inputs, 'field_' + f.order); values[f.name] = v; if (f.required && !String(v).trim()) errors.push(f.name); });
+  fields.forEach(function(f) {
+    var v;
+    if (f.type === 'checkbox_qty') {
+      var qp = parseQtyOptions_(f.options);
+      var qItems = qp.opts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+      var pairs = [];
+      qItems.forEach(function(itemName, oi) {
+        var qv = String(getInputValue_(inputs, 'field_' + f.order + '_q_' + oi) || '').trim();
+        if (qv && qv !== '0') pairs.push(itemName + '×' + qv);
+      });
+      v = pairs.join(', ');
+    } else {
+      v = getInputValue_(inputs, 'field_' + f.order);
+    }
+    values[f.name] = v;
+    if (f.required && !String(v).trim()) errors.push(f.name);
+  });
   if (errors.length > 0) return buildWorkflowDialogCard_(workflowId, values, errors, 'update');
   // 並行申請時の rowIndex 取り違え防止のため、appendRow→getLastRow→承認カード送信までを直列化する。
   var lock = LockService.getScriptLock();

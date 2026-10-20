@@ -188,7 +188,7 @@ function initSortable(){
    ============================================================ */
 function renderFields(){
   if(!currentFields.length)return '<div style="padding:14px;text-align:center;color:var(--c-text-faint);font-size:12px">項目がありません</div>';
-  return currentFields.map(function(f,i){var tl={text:'テキスト',textarea:'複数行',dropdown:'プルダウン',checkbox:'チェックボックス',date:'日付'}[f.type]||f.type;return '<div class="field-item" data-index="'+i+'"><div class="field-info"><span class="field-grip mi">drag_indicator</span><span class="field-name">'+esc(f.name)+'</span><span class="field-type">'+tl+'</span>'+(f.required?'<span class="field-required">必須</span>':'')+'</div><div class="field-actions"><button class="btn btn-sm" onclick="editField('+i+')">編集</button><button class="btn btn-sm btn-danger" onclick="removeField('+i+')"><span class="mi" style="font-size:16px">close</span></button></div></div>';}).join('');
+  return currentFields.map(function(f,i){var tl={text:'テキスト',textarea:'複数行',dropdown:'プルダウン',checkbox:'チェックボックス',checkbox_qty:'数量付きチェック',date:'日付'}[f.type]||f.type;return '<div class="field-item" data-index="'+i+'"><div class="field-info"><span class="field-grip mi">drag_indicator</span><span class="field-name">'+esc(f.name)+'</span><span class="field-type">'+tl+'</span>'+(f.required?'<span class="field-required">必須</span>':'')+'</div><div class="field-actions"><button class="btn btn-sm" onclick="editField('+i+')">編集</button><button class="btn btn-sm btn-danger" onclick="removeField('+i+')"><span class="mi" style="font-size:16px">close</span></button></div></div>';}).join('');
 }
 function renderButtons(){
   if(!currentButtons.length)return '<div style="padding:14px;text-align:center;color:var(--c-text-faint);font-size:12px">ボタン未設定（デフォルトの承認/却下）</div>';
@@ -203,7 +203,7 @@ function updatePreview(){
   var nm=val('wfName')||'ワークフロー名',tp=val('wfType')||'申請・承認',dsc=val('wfDescription')||'';
   var ic=tp==='申請・承認'?'🔔':'📝',tt=tp==='申請・承認'?ic+' 新しい申請':ic+' '+esc(nm);
   var rows='<div class="chat-card-row"><div class="chat-card-label">送信者</div><div class="chat-card-value">山田 太郎</div></div>';
-  currentFields.forEach(function(f){var s={dropdown:f.options?(f.options.split(',')[0].trim()):'選択肢',date:'2026/09/18',textarea:'テキスト内容...',checkbox:f.options?(f.options.split(',')[0].trim()):'選択肢'}[f.type]||'入力例';rows+='<div class="chat-card-row"><div class="chat-card-label">'+esc(f.name)+(f.required?' *':'')+'</div><div class="chat-card-value">'+esc(s)+'</div></div>';});
+  currentFields.forEach(function(f){var s;if(f.type==='checkbox_qty'){var qp=parseQtyOptions(f.options);var fo=(qp.opts||'').split(',').map(function(x){return x.trim();}).filter(function(x){return x;});s=fo.length?(fo[0]+'×2'+(fo[1]?', '+fo[1]+'×1':'')):'選択肢×数量';}else{s={dropdown:f.options?(f.options.split(',')[0].trim()):'選択肢',date:'2026/09/18',textarea:'テキスト内容...',checkbox:f.options?(f.options.split(',')[0].trim()):'選択肢'}[f.type]||'入力例';}rows+='<div class="chat-card-row"><div class="chat-card-label">'+esc(f.name)+(f.required?' *':'')+'</div><div class="chat-card-value">'+esc(s)+'</div></div>';});
   if(tp==='申請・承認')rows+='<div class="chat-card-row"><div class="chat-card-label">ステータス</div><div class="chat-card-value">⏳ 承認待ち</div></div>';
   var btns='';if(tp==='申請・承認'){var bl=currentButtons.length?currentButtons:[{name:'承認',color:'green'},{name:'却下',color:'red'}];btns='<div class="chat-card-buttons">'+bl.map(function(b){return '<div class="chat-btn" style="background:'+(COLORS[b.color]||'#888')+'">'+esc(b.name)+'</div>';}).join('')+'</div>';}
   ce.innerHTML='<div class="chat-card"><div class="chat-card-header"><div class="chat-card-header-title">'+tt+'</div>'+(dsc?'<div class="chat-card-header-desc">'+esc(dsc)+'</div>':'')+'<div class="chat-card-header-sub">'+esc(nm)+' - 山田 太郎</div></div><div class="chat-card-body">'+rows+'</div>'+btns+'</div><div class="preview-label">Google Chat での表示イメージ</div>';
@@ -216,20 +216,57 @@ function updatePreview(){
 function addField(){showFieldModal(-1)}
 function editField(i){showFieldModal(i)}
 function removeField(i){currentFields.splice(i,1);markDirty();document.getElementById('fieldList').innerHTML=renderFields();initSortable();updatePreview();hideError('errFields');}
+// 数量付きチェックボックスの options は "<選択肢カンマ区切り>###<qtype>###<数量候補>" 形式で保存。
+function parseQtyOptions(raw){
+  var s=String(raw||'');
+  var parts=s.split('###');
+  return {opts:parts[0]||'', qtype:parts[1]||'number', qopts:parts[2]||''};
+}
+function buildQtyOptions(opts,qtype,qopts){
+  return (opts||'')+'###'+(qtype||'number')+'###'+(qopts||'');
+}
 function showFieldModal(idx){
   var f=idx>=0?currentFields[idx]:{name:'',type:'text',options:'',required:false};
+  var qp=f.type==='checkbox_qty'?parseQtyOptions(f.options):{opts:f.options||'',qtype:'number',qopts:'1,2,3,5,10'};
   var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
-  ov.innerHTML='<div class="modal"><h3>'+(idx>=0?'項目の編集':'項目の追加')+'</h3><div class="form-group"><label>項目名</label><input type="text" id="fName" value="'+esc(f.name)+'"><div class="error-msg" id="errFName">項目名を入力してください</div></div><div class="form-group"><label>入力タイプ</label><select id="fType" onchange="toggleOpts()"><option value="text"'+(f.type==='text'?' selected':'')+'>テキスト（1行）</option><option value="textarea"'+(f.type==='textarea'?' selected':'')+'>テキスト（複数行）</option><option value="dropdown"'+(f.type==='dropdown'?' selected':'')+'>プルダウン</option><option value="checkbox"'+(f.type==='checkbox'?' selected':'')+'>チェックボックス</option><option value="date"'+(f.type==='date'?' selected':'')+'>日付</option></select></div><div class="form-group" id="optsG" style="'+((f.type==='dropdown'||f.type==='checkbox')?'':'display:none')+'"><label>選択肢（カンマ区切り）</label><input type="text" id="fOpts" value="'+esc(f.options)+'"></div><div class="form-group"><div class="checkbox-row"><input type="checkbox" id="fReq"'+(f.required?' checked':'')+'><label for="fReq">必須項目にする</label></div></div><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveField('+idx+')">保存</button></div></div>';
+  var optsVal=f.type==='checkbox_qty'?qp.opts:(f.options||'');
+  ov.innerHTML='<div class="modal"><h3>'+(idx>=0?'項目の編集':'項目の追加')+'</h3>'
+    +'<div class="form-group"><label>項目名</label><input type="text" id="fName" value="'+esc(f.name)+'"><div class="error-msg" id="errFName">項目名を入力してください</div></div>'
+    +'<div class="form-group"><label>入力タイプ</label><select id="fType" onchange="toggleOpts()">'
+    +'<option value="text"'+(f.type==='text'?' selected':'')+'>テキスト（1行）</option>'
+    +'<option value="textarea"'+(f.type==='textarea'?' selected':'')+'>テキスト（複数行）</option>'
+    +'<option value="dropdown"'+(f.type==='dropdown'?' selected':'')+'>プルダウン</option>'
+    +'<option value="checkbox"'+(f.type==='checkbox'?' selected':'')+'>チェックボックス</option>'
+    +'<option value="checkbox_qty"'+(f.type==='checkbox_qty'?' selected':'')+'>数量付きチェックボックス</option>'
+    +'<option value="date"'+(f.type==='date'?' selected':'')+'>日付</option>'
+    +'</select></div>'
+    +'<div class="form-group" id="optsG" style="'+((f.type==='dropdown'||f.type==='checkbox'||f.type==='checkbox_qty')?'':'display:none')+'"><label>選択肢（カンマ区切り）</label><input type="text" id="fOpts" value="'+esc(optsVal)+'" placeholder="例: 消しゴム, ノート, ペン"></div>'
+    +'<div class="form-group" id="qtyTypeG" style="'+(f.type==='checkbox_qty'?'':'display:none')+'"><label>数量の入力タイプ</label><select id="fQtyType" onchange="toggleOpts()"><option value="number"'+(qp.qtype==='number'?' selected':'')+'>数値入力（自由入力）</option><option value="dropdown"'+(qp.qtype==='dropdown'?' selected':'')+'>プルダウン（候補から選択）</option></select></div>'
+    +'<div class="form-group" id="qtyOptsG" style="'+(f.type==='checkbox_qty'&&qp.qtype==='dropdown'?'':'display:none')+'"><label>数量の候補（カンマ区切り）</label><input type="text" id="fQtyOpts" value="'+esc(qp.qopts)+'" placeholder="例: 1, 2, 5, 10"></div>'
+    +'<div class="form-group"><div class="checkbox-row"><input type="checkbox" id="fReq"'+(f.required?' checked':'')+'><label for="fReq">必須項目にする</label></div></div>'
+    +'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveField('+idx+')">保存</button></div></div>';
   document.body.appendChild(ov);
 }
-function toggleOpts(){document.getElementById('optsG').style.display=(document.getElementById('fType').value==='dropdown'||document.getElementById('fType').value==='checkbox')?'':'none';}
+function toggleOpts(){
+  var t=document.getElementById('fType').value;
+  document.getElementById('optsG').style.display=(t==='dropdown'||t==='checkbox'||t==='checkbox_qty')?'':'none';
+  document.getElementById('qtyTypeG').style.display=(t==='checkbox_qty')?'':'none';
+  var qt=document.getElementById('fQtyType')?document.getElementById('fQtyType').value:'number';
+  document.getElementById('qtyOptsG').style.display=(t==='checkbox_qty'&&qt==='dropdown')?'':'none';
+}
 function saveField(idx){
   var n=document.getElementById('fName').value.trim();
   if(!n){showError('errFName');return;}
   hideError('errFName');
-  // fieldId は既存フィールド編集時に維持する(サーバ側の差分計算で使用)。追加時は空のまま(保存時にサーバが採番)。
   var existingId=idx>=0?(currentFields[idx].fieldId||''):'';
-  var f={fieldId:existingId,name:n,type:document.getElementById('fType').value,options:document.getElementById('fOpts')?document.getElementById('fOpts').value:'',required:document.getElementById('fReq').checked,order:idx>=0?currentFields[idx].order:currentFields.length+1};
+  var t=document.getElementById('fType').value;
+  var opts=document.getElementById('fOpts')?document.getElementById('fOpts').value:'';
+  if(t==='checkbox_qty'){
+    var qt=document.getElementById('fQtyType').value;
+    var qo=document.getElementById('fQtyOpts')?document.getElementById('fQtyOpts').value:'';
+    opts=buildQtyOptions(opts,qt,qo);
+  }
+  var f={fieldId:existingId,name:n,type:t,options:opts,required:document.getElementById('fReq').checked,order:idx>=0?currentFields[idx].order:currentFields.length+1};
   if(idx>=0)currentFields[idx]=f;else currentFields.push(f);
   markDirty();document.querySelector('.modal-overlay').remove();document.getElementById('fieldList').innerHTML=renderFields();initSortable();updatePreview();hideError('errFields');
 }
