@@ -15,10 +15,10 @@ function getActiveWorkflows_() {
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheetByName(SHEET_SETTINGS);
     if (!sheet || sheet.getLastRow() < 2) return [];
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getValues();
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 16).getValues();
     var wfs = [];
     // status === '有効' のみ(archived や '無効' は除外)
-    data.forEach(function(r) { if (r[7] === '有効') wfs.push({ id: r[0], name: r[1], type: r[2], execSpace: r[3], targetSpace: r[4], creator: r[5], created: r[6], status: r[7], approvers: r[9] || '', externalSheet: r[10] || '' }); });
+    data.forEach(function(r) { if (r[7] === '有効') wfs.push({ id: r[0], name: r[1], type: r[2], execSpace: r[3], targetSpace: r[4], creator: r[5], created: r[6], status: r[7], approvers: r[9] || '', externalSheet: r[10] || '', description: r[15] || '' }); });
     return wfs;
   } catch (err) { recordDataError_('getActiveWorkflows_', err); return []; }
 }
@@ -28,10 +28,10 @@ function getWorkflowById_(id) {
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheetByName(SHEET_SETTINGS);
     if (!sheet || sheet.getLastRow() < 2) return null;
-    var lastCol = Math.max(sheet.getLastColumn(), 15);
+    var lastCol = Math.max(sheet.getLastColumn(), 16);
     var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
     // archived は返さない(復元 API 経由でのみ archived を扱う)
-    for (var i = 0; i < data.length; i++) { if (data[i][0] === id && data[i][7] !== 'archived') return { id: data[i][0], name: data[i][1], type: data[i][2], execSpace: data[i][3], targetSpace: data[i][4], creator: data[i][5], created: data[i][6], status: data[i][7], approvers: data[i][9] || '', externalSheet: data[i][10] || '', approverUserIds: data[i][12] || '', mentionText: data[i][13] || '', collaborators: data[i][14] || '' }; }
+    for (var i = 0; i < data.length; i++) { if (data[i][0] === id && data[i][7] !== 'archived') return { id: data[i][0], name: data[i][1], type: data[i][2], execSpace: data[i][3], targetSpace: data[i][4], creator: data[i][5], created: data[i][6], status: data[i][7], approvers: data[i][9] || '', externalSheet: data[i][10] || '', approverUserIds: data[i][12] || '', mentionText: data[i][13] || '', collaborators: data[i][14] || '', description: data[i][15] || '' }; }
     return null;
   } catch (err) { recordDataError_('getWorkflowById_', err); return null; }
 }

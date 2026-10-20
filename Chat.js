@@ -56,7 +56,9 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode) {
   });
   widgets.push({ buttonList: { buttons: [{ text: '送信', onClick: { action: { function: cardActionFunc_(), parameters: [{ key: 'actionName', value: 'submitWorkflow' }, { key: 'workflowId', value: String(workflowId) }] } } }] } });
   var icon = (wf.type === '申請・承認') ? '📋' : '📝';
-  var card = { header: { title: icon + ' ' + wf.name }, sections: [{ widgets: widgets }] };
+  var _hdr = { title: icon + ' ' + wf.name };
+  if (wf.description) _hdr.subtitle = wf.description;
+  var card = { header: _hdr, sections: [{ widgets: widgets }] };
   var nav = (navMode === 'update') ? { updateCard: card } : { pushCard: card };
   return { action: { navigations: [nav] } };
 }

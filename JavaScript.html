@@ -82,8 +82,8 @@ function createNew(){
 function renderEditor(){
   var wf=currentWfId?workflows.find(function(w){return w.id===currentWfId}):null;
   // 新規作成中の再レンダー(例: 種類変更時)で入力値が消えないよう、現在のDOM値を保持する。
-  var _pt=val('wfType'),_pn=val('wfName'),_pes=val('wfExecSpace'),_pts=val('wfTargetSpace'),_pext=val('wfExtSheet');
-  var name=wf?wf.name:(_pn||''),type=wf?wf.type:(_pt||'申請・承認'),es=wf?wf.execSpace:(_pes||''),ts=wf?wf.targetSpace:(_pts||''),extSheet=wf?wf.externalSheet||'':(_pext||'');
+  var _pt=val('wfType'),_pn=val('wfName'),_pes=val('wfExecSpace'),_pts=val('wfTargetSpace'),_pext=val('wfExtSheet'),_pdesc=val('wfDescription');
+  var name=wf?wf.name:(_pn||''),type=wf?wf.type:(_pt||'申請・承認'),es=wf?wf.execSpace:(_pes||''),ts=wf?wf.targetSpace:(_pts||''),extSheet=wf?wf.externalSheet||'':(_pext||''),description=wf?wf.description||'':(_pdesc||'');
   // スペース数が多いためオートコンプリート方式。表示用<input list>+ 保存用hidden input の構成。
   var spDl='<datalist id="spDl">'+spaces.map(function(s){return '<option value="'+esc(s.name)+'">';}).join('')+'</datalist>';
   var spPh=spacesLoading?'読み込み中...':'入力して候補から選択';
@@ -115,6 +115,7 @@ function renderEditor(){
   // Section 1: 基本情報
   left+='<div class="editor-section'+(tab!=='basic'?' hidden':'')+'" id="secBasic">'
     +'<div class="form-row"><div class="form-group"><label>ワークフロー名</label><input type="text" id="wfName" value="'+esc(name)+'" oninput="markDirty();updatePreview()"><div class="error-msg" id="errName">ワークフロー名を入力してください</div></div><div class="form-group"><label>種類</label><select id="wfType" onchange="markDirty();renderEditor()"><option value="申請・承認"'+(type==='申請・承認'?' selected':'')+'>申請・承認</option><option value="定型文送信"'+(type==='定型文送信'?' selected':'')+'>定型文送信</option></select></div></div>'
+    +'<div class="form-group"><label>説明文（任意）</label><input type="text" id="wfDescription" value="'+esc(description)+'" placeholder="このワークフローの用途を1行で説明" oninput="markDirty();updatePreview()" maxlength="200"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">カードのワークフロー名の下に小さく表示されます（最大200文字）。</div></div>'
     +'<div class="form-row"><div class="form-group"><label>実行スペース（複数選択可）</label>'+_spMultiInput('wfExecSpace',es)+'<div class="error-msg" id="errExec">実行スペースを1つ以上選択してください</div></div><div class="form-group"><label>送信先スペース（任意）</label>'+_spInput('wfTargetSpaceSearch','wfTargetSpace',ts)+'<div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">空欄なら申請ボタンが押された実行スペースに送信されます。</div><div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'+spDl
     +'<div class="form-group"><label>共同編集者（メンバー権限のユーザでもこのワークフローを編集可）</label><input type="text" id="wfCollaborators" value="'+esc(wf?wf.collaborators||'':'')+'" placeholder="カンマ区切りでメール入力（例: a@example.com, b@example.com）" oninput="markDirty()"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">オーナー/エディタは全ワークフロー編集可。メンバーは自分作成分＋この欄に指定された場合のみ編集可。</div></div>'
     +'</div>';
@@ -199,13 +200,13 @@ function renderButtons(){
    ============================================================ */
 function updatePreview(){
   var ce=document.getElementById('previewCard'),fe=document.getElementById('previewFlow');if(!ce)return;
-  var nm=val('wfName')||'ワークフロー名',tp=val('wfType')||'申請・承認';
+  var nm=val('wfName')||'ワークフロー名',tp=val('wfType')||'申請・承認',dsc=val('wfDescription')||'';
   var ic=tp==='申請・承認'?'🔔':'📝',tt=tp==='申請・承認'?ic+' 新しい申請':ic+' '+esc(nm);
   var rows='<div class="chat-card-row"><div class="chat-card-label">送信者</div><div class="chat-card-value">山田 太郎</div></div>';
   currentFields.forEach(function(f){var s={dropdown:f.options?(f.options.split(',')[0].trim()):'選択肢',date:'2026/09/18',textarea:'テキスト内容...',checkbox:f.options?(f.options.split(',')[0].trim()):'選択肢'}[f.type]||'入力例';rows+='<div class="chat-card-row"><div class="chat-card-label">'+esc(f.name)+(f.required?' *':'')+'</div><div class="chat-card-value">'+esc(s)+'</div></div>';});
   if(tp==='申請・承認')rows+='<div class="chat-card-row"><div class="chat-card-label">ステータス</div><div class="chat-card-value">⏳ 承認待ち</div></div>';
   var btns='';if(tp==='申請・承認'){var bl=currentButtons.length?currentButtons:[{name:'承認',color:'green'},{name:'却下',color:'red'}];btns='<div class="chat-card-buttons">'+bl.map(function(b){return '<div class="chat-btn" style="background:'+(COLORS[b.color]||'#888')+'">'+esc(b.name)+'</div>';}).join('')+'</div>';}
-  ce.innerHTML='<div class="chat-card"><div class="chat-card-header"><div class="chat-card-header-title">'+tt+'</div><div class="chat-card-header-sub">'+esc(nm)+' - 山田 太郎</div></div><div class="chat-card-body">'+rows+'</div>'+btns+'</div><div class="preview-label">Google Chat での表示イメージ</div>';
+  ce.innerHTML='<div class="chat-card"><div class="chat-card-header"><div class="chat-card-header-title">'+tt+'</div>'+(dsc?'<div class="chat-card-header-desc">'+esc(dsc)+'</div>':'')+'<div class="chat-card-header-sub">'+esc(nm)+' - 山田 太郎</div></div><div class="chat-card-body">'+rows+'</div>'+btns+'</div><div class="preview-label">Google Chat での表示イメージ</div>';
   if(fe&&tp==='申請・承認'){var bl2=currentButtons.length?currentButtons:[{name:'承認',status:'承認',color:'green',threadReply:false},{name:'却下',status:'却下',color:'red',threadReply:false}];var fh='';bl2.forEach(function(b,i){fh+='<div class="step-block"><div class="step-block-title">'+(EMOJI[b.color]||'⚪')+' 「'+esc(b.name)+'」が押されたら</div><div class="step-block-content">ステータス → 「'+esc(b.status||b.name)+'」'+(b.threadReply?'<br>📝 返信: '+esc((b.replyMsg||'').substring(0,50)):'<br><span style="color:#bbb">ステータス変更のみ</span>')+'</div></div>';if(i<bl2.length-1)fh+='<div class="step-arrow">↓</div>';});fh+='<div class="step-arrow">↓</div><div class="step-block"><div class="step-block-title">✅ 完了</div><div class="step-block-content">カードが更新されボタンが消えます</div></div>';fe.innerHTML=fh;}
 }
 
@@ -277,6 +278,7 @@ function save(){
     return;
   }
   var data={id:currentWfId,name:val('wfName'),type:val('wfType'),execSpace:val('wfExecSpace'),targetSpace:val('wfTargetSpace'),
+    description:val('wfDescription')||'',
     approvers:val('wfApprovers'),
     approverUserIds:val('wfApproverUserIds'),
     mentionText:val('wfMentionText')||'',
@@ -300,7 +302,7 @@ function doSaveWorkflow(data){
     if(r.error){showToast('エラー: '+r.error);return;}
     isDirty=false;
     var ex=workflows.findIndex(function(w){return w.id===r.id});
-    var nw={id:r.id,name:data.name,type:data.type,execSpace:data.execSpace,targetSpace:data.targetSpace,status:'有効',approvers:data.approvers||'',approverUserIds:data.approverUserIds||'',mentionText:data.mentionText||'',collaborators:data.collaborators||'',externalSheet:data.externalSheet||'',canEdit:true,canDelete:true};
+    var nw={id:r.id,name:data.name,type:data.type,execSpace:data.execSpace,targetSpace:data.targetSpace,description:data.description||'',status:'有効',approvers:data.approvers||'',approverUserIds:data.approverUserIds||'',mentionText:data.mentionText||'',collaborators:data.collaborators||'',externalSheet:data.externalSheet||'',canEdit:true,canDelete:true};
     if(ex>=0)workflows[ex]=nw;else workflows.push(nw);
     currentWfId=r.id;
     // 保存後、フィールドの fieldId をサーバから再取得(次回編集時の差分計算に必要)

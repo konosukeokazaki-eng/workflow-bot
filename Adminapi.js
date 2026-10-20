@@ -314,8 +314,10 @@ function api_saveWorkflow(data) {
     if (stSheet.getLastColumn() < 13 || stSheet.getRange(1, 13).getValue() !== '承認者UserID') stSheet.getRange(1, 13).setValue('承認者UserID');
     if (stSheet.getLastColumn() < 14 || stSheet.getRange(1, 14).getValue() !== 'メンション文言') stSheet.getRange(1, 14).setValue('メンション文言');
     if (stSheet.getLastColumn() < 15 || stSheet.getRange(1, 15).getValue() !== '共同編集者') stSheet.getRange(1, 15).setValue('共同編集者');
+    if (stSheet.getLastColumn() < 16 || stSheet.getRange(1, 16).getValue() !== '説明文') stSheet.getRange(1, 16).setValue('説明文');
     var approverUserIds = String(data.approverUserIds || '').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }).join(',');
     var mentionText = String(data.mentionText || '').trim();
+    var description = String(data.description || '').trim();
     // 承認者・共同編集者メールは不可視文字を除去して保存する
     data.approvers = sanitizeEmailList_(data.approvers);
     var collaboratorsClean = sanitizeEmailList_(data.collaborators);
@@ -329,11 +331,11 @@ function api_saveWorkflow(data) {
     if (isNew) {
       wid = 1;
       if (stSheet.getLastRow() >= 2) { stSheet.getRange(2, 1, stSheet.getLastRow() - 1, 1).getValues().forEach(function(r) { if (r[0] >= wid) wid = r[0] + 1; }); }
-      stSheet.appendRow([wid, data.name, data.type, data.execSpace, data.targetSpace, caller, new Date(), '有効', '', data.approvers || '', data.externalSheet || '', '', approverUserIds, mentionText, collaboratorsClean]);
+      stSheet.appendRow([wid, data.name, data.type, data.execSpace, data.targetSpace, caller, new Date(), '有効', '', data.approvers || '', data.externalSheet || '', '', approverUserIds, mentionText, collaboratorsClean, description]);
     } else {
       wid = data.id;
       var rows = stSheet.getRange(2, 1, stSheet.getLastRow() - 1, 11).getValues();
-      for (var i = 0; i < rows.length; i++) { if (rows[i][0] === wid) { var rn = i + 2; oldName = rows[i][1]; stSheet.getRange(rn, 2).setValue(data.name); stSheet.getRange(rn, 3).setValue(data.type); stSheet.getRange(rn, 4).setValue(data.execSpace); stSheet.getRange(rn, 5).setValue(data.targetSpace); stSheet.getRange(rn, 10).setValue(data.approvers || ''); stSheet.getRange(rn, 11).setValue(data.externalSheet || ''); stSheet.getRange(rn, 13).setValue(approverUserIds); stSheet.getRange(rn, 14).setValue(mentionText); stSheet.getRange(rn, 15).setValue(collaboratorsClean); break; } }
+      for (var i = 0; i < rows.length; i++) { if (rows[i][0] === wid) { var rn = i + 2; oldName = rows[i][1]; stSheet.getRange(rn, 2).setValue(data.name); stSheet.getRange(rn, 3).setValue(data.type); stSheet.getRange(rn, 4).setValue(data.execSpace); stSheet.getRange(rn, 5).setValue(data.targetSpace); stSheet.getRange(rn, 10).setValue(data.approvers || ''); stSheet.getRange(rn, 11).setValue(data.externalSheet || ''); stSheet.getRange(rn, 13).setValue(approverUserIds); stSheet.getRange(rn, 14).setValue(mentionText); stSheet.getRange(rn, 15).setValue(collaboratorsClean); stSheet.getRange(rn, 16).setValue(description); break; } }
     }
 
     // データシートを準備。新規シートは最小ヘッダー(ts/sender/email + status? + messageName)のみで作り、
@@ -664,7 +666,9 @@ function api_deployButton(wid) {
     execList.forEach(function(sid){
       try { addBotToSpace_(sid); } catch (e) {}
       try {
-        var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sid + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + t }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + wid, card: { header: { title: icon + ' ' + wf.name }, sections: [{ widgets: [{ buttonList: { buttons: [{ text: label, color: COLOR_MAP.blue, onClick: { action: { function: cardActionFunc_(), interaction: 'OPEN_DIALOG', parameters: [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(wid) }] } } }] } }] }] } }] }), muteHttpExceptions: true });
+        var _hdr = { title: icon + ' ' + wf.name };
+        if (wf.description) _hdr.subtitle = wf.description;
+        var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sid + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + t }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + wid, card: { header: _hdr, sections: [{ widgets: [{ buttonList: { buttons: [{ text: label, color: COLOR_MAP.blue, onClick: { action: { function: cardActionFunc_(), interaction: 'OPEN_DIALOG', parameters: [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(wid) }] } } }] } }] }] } }] }), muteHttpExceptions: true });
         var r = JSON.parse(resp.getContentText());
         if (r.name) postedNames.push(r.name);
         else errors.push(sid + ': ' + resp.getContentText());
