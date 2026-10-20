@@ -30,6 +30,23 @@ function openWorkflowDialog_(event) {
   if (!wid) return createMessage_('ワークフローが選択されていません。');
   var chain = parseInt(params.chain || '1', 10);
   var inheritFrom = params.inheritThreadFrom || '';
+  // 連動ボタンから直接呼ばれる場合は親WF/行指定で親メッセージ名を解決する
+  if (!inheritFrom && params.parentWorkflowId && params.parentRow) {
+    try {
+      var pwf = getWorkflowById_(parseInt(params.parentWorkflowId, 10));
+      if (pwf) {
+        var pss = SpreadsheetApp.openById(SPREADSHEET_ID);
+        var pds = pss.getSheetByName(pwf.name);
+        if (pds) {
+          var phdrs = pds.getRange(1, 1, 1, pds.getLastColumn()).getValues()[0];
+          for (var pi = 0; pi < phdrs.length; pi++) {
+            if (phdrs[pi] === 'メッセージ名') { inheritFrom = pds.getRange(parseInt(params.parentRow, 10), pi + 1).getValue() || ''; break; }
+          }
+        }
+      }
+    } catch (e) { Logger.log('parent resolve skip: ' + e.message); }
+  }
+  if (chain > 3) return createMessage_('連鎖上限(3階層)を超えています。');
   return buildWorkflowDialog_(parseInt(wid, 10), chain, inheritFrom);
 }
 
@@ -73,6 +90,7 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode, chain, i
           var itemLabel = itemName + '（数量）';
           if (qp.qtype === 'dropdown') {
             var qopts = qp.qopts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+            if (qopts.indexOf('0') === -1) qopts.unshift('0');
             var items = [];
             qopts.forEach(function(q, qi){ items.push({ text: q, value: q, selected: curVal ? (curVal === q) : (qi === 0) }); });
             widgets.push({ selectionInput: { label: itemLabel, name: key, type: 'DROPDOWN', items: items } });
@@ -192,7 +210,20 @@ function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, 
   var secToken = generateToken_(wf.id, rowIndex);
   var chainVal = chain || 1;
   var chatBtns = buttons.map(function(b, idx) {
-    return { text: b.name, color: COLOR_MAP[b.color] || COLOR_MAP.gray, onClick: { openLink: { url: FUNCTION_URL + '?action=btn&row=' + rowIndex + '&wf=' + wf.id + '&btn=' + idx + '&name=' + encodeURIComponent(senderName) + '&token=' + secToken + '&chain=' + chainVal } } };
+    var color = COLOR_MAP[b.color] || COLOR_MAP.gray;
+    if (b.type === 'launch' && b.linkedWorkflowId) {
+      var lp = [
+        { key: 'actionName', value: 'openWorkflow' },
+        { key: 'workflowId', value: String(b.linkedWorkflowId) },
+        { key: 'chain', value: String(chainVal + 1) }
+      ];
+      if (b.inheritThread) {
+        lp.push({ key: 'parentWorkflowId', value: String(wf.id) });
+        lp.push({ key: 'parentRow', value: String(rowIndex) });
+      }
+      return { text: b.name, color: color, onClick: { action: { function: cardActionFunc_(), parameters: lp, interaction: 'OPEN_DIALOG' } } };
+    }
+    return { text: b.name, color: color, onClick: { openLink: { url: FUNCTION_URL + '?action=btn&row=' + rowIndex + '&wf=' + wf.id + '&btn=' + idx + '&name=' + encodeURIComponent(senderName) + '&token=' + secToken + '&chain=' + chainVal } } };
   });
   widgets.push({ buttonList: { buttons: chatBtns } });
   // 承認者 User ID が保存されていれば message.text にメンションを付与して通知を飛ばす。
