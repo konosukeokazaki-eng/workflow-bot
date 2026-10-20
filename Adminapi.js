@@ -245,11 +245,12 @@ function api_getSpaceMembers(spaceId) {
       return { userId: id, email: '', displayName: m.member.displayName || '' };
     });
 
-    // People API で email を解決(バッチで最大 50 件)
+    // People API で email を解決(バッチで最大 50 件)。sources にドメインプロファイル/連絡先を追加して Workspace 社員のメールを引けるようにする。
     var userToken = ScriptApp.getOAuthToken();
+    var sourcesParam = '&sources=READ_SOURCE_TYPE_PROFILE&sources=READ_SOURCE_TYPE_DOMAIN_CONTACT&sources=READ_SOURCE_TYPE_CONTACT';
     for (var i = 0; i < members.length; i += 50) {
       var chunk = members.slice(i, i + 50);
-      var params = chunk.map(function(m) { return 'resourceNames=people/' + encodeURIComponent(m.userId); }).join('&') + '&personFields=emailAddresses';
+      var params = chunk.map(function(m) { return 'resourceNames=people/' + encodeURIComponent(m.userId); }).join('&') + '&personFields=emailAddresses' + sourcesParam;
       try {
         var pr = UrlFetchApp.fetch('https://people.googleapis.com/v1/people:batchGet?' + params, { method: 'get', headers: { 'Authorization': 'Bearer ' + userToken }, muteHttpExceptions: true });
         if (pr.getResponseCode() < 400) {
@@ -265,6 +266,19 @@ function api_getSpaceMembers(spaceId) {
           });
         }
       } catch (e) { Logger.log('people.batchGet 失敗: ' + e.message); }
+    }
+    // People API で取れなかったユーザーは Admin Directory API でフォールバック(directory.readonly スコープを利用)
+    var missing = members.filter(function(m) { return !m.email; });
+    for (var k = 0; k < missing.length; k++) {
+      try {
+        var dr = UrlFetchApp.fetch('https://admin.googleapis.com/admin/directory/v1/users/' + encodeURIComponent(missing[k].userId) + '?projection=basic&viewType=domain_public', { method: 'get', headers: { 'Authorization': 'Bearer ' + userToken }, muteHttpExceptions: true });
+        if (dr.getResponseCode() < 400) {
+          var du = JSON.parse(dr.getContentText());
+          if (du.primaryEmail) {
+            for (var jj = 0; jj < members.length; jj++) { if (members[jj].userId === missing[k].userId) { members[jj].email = du.primaryEmail; break; } }
+          }
+        }
+      } catch (e2) { Logger.log('directory.users.get 失敗: ' + missing[k].userId + ' ' + e2.message); }
     }
 
     // 名前で並び替え

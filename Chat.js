@@ -64,17 +64,18 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode) {
         var qItems = qp.opts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
         var pvMap = {};
         if (pv) { String(pv).split(',').forEach(function(seg){ var m = seg.match(/^\s*(.+?)\s*×\s*(\S+)\s*$/); if (m) pvMap[m[1]] = m[2]; }); }
-        widgets.push({ textParagraph: { text: '<b>' + label + '</b>（数量を入力/選択。空欄や0は未選択）' } });
+        widgets.push({ textParagraph: { text: '<b>' + label + '</b>' } });
         qItems.forEach(function(itemName, oi) {
           var key = 'field_' + f.order + '_q_' + oi;
           var curVal = pvMap[itemName] || '';
+          var itemLabel = itemName + '（数量）';
           if (qp.qtype === 'dropdown') {
             var qopts = qp.qopts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
-            var items = [{ text: '未選択', value: '', selected: !curVal }];
+            var items = [{ text: '—', value: '' }];
             qopts.forEach(function(q){ items.push({ text: q, value: q, selected: curVal === q }); });
-            widgets.push({ selectionInput: { label: itemName, name: key, type: 'DROPDOWN', items: items } });
+            widgets.push({ selectionInput: { label: itemLabel, name: key, type: 'DROPDOWN', items: items } });
           } else {
-            widgets.push({ textInput: { label: itemName, name: key, type: 'SINGLE_LINE', value: curVal, hintText: '数量（空欄=未選択）' } });
+            widgets.push({ textInput: { label: itemLabel, name: key, type: 'SINGLE_LINE', value: curVal, hintText: '半角数字（空欄=未選択）' } });
           }
         });
         break;
@@ -113,7 +114,13 @@ function handleSubmitWorkflow_(event) {
       var pairs = [];
       qItems.forEach(function(itemName, oi) {
         var qv = String(getInputValue_(inputs, 'field_' + f.order + '_q_' + oi) || '').trim();
-        if (qv && qv !== '0') pairs.push(itemName + '×' + qv);
+        if (!qv) return;
+        if (qp.qtype === 'number') {
+          var n = parseInt(qv.replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(n) && n > 0) pairs.push(itemName + '×' + n);
+        } else if (qv !== '0') {
+          pairs.push(itemName + '×' + qv);
+        }
       });
       v = pairs.join(', ');
     } else {
@@ -252,6 +259,9 @@ function handleApproval_(e) {
       if (!currentUser || approverList.indexOf(currentUser) === -1) return htmlPage_('🚫', '権限がありません', '', '#666');
     }
     sheet.getRange(rowIndex, statusCol).setValue(newStatus);
+    SpreadsheetApp.flush();
+    var writeBack = sheet.getRange(rowIndex, statusCol).getValue();
+    Logger.log('approval setValue row=' + rowIndex + ' expected=' + newStatus + ' actual=' + writeBack);
     updateExternalSheet_(wf, wf.name, rowIndex, statusCol, newStatus);
     var messageName = msgCol > 0 ? sheet.getRange(rowIndex, msgCol).getValue() : '';
     if (messageName) updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicantName, newStatus, emoji, headers);
@@ -282,8 +292,13 @@ function updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicant
   widgets.push({ decoratedText: { topLabel: 'ステータス', text: emoji + ' ' + newStatus } });
   try {
     var token = getServiceAccountToken_();
-    UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + messageName + '?updateMask=cardsV2', { method: 'put', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ cardsV2: [{ cardId: 'approval_' + wf.id + '_' + rowIndex, card: { header: { title: emoji + ' ' + newStatus, subtitle: wf.name + ' - ' + applicantName }, sections: [{ widgets: widgets }] } }] }), muteHttpExceptions: true });
-  } catch (err) { Logger.log('カード更新エラー: ' + err.message); }
+    var upd = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + messageName + '?updateMask=cardsV2', { method: 'put', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ cardsV2: [{ cardId: 'approval_' + wf.id + '_' + rowIndex, card: { header: { title: emoji + ' ' + newStatus, subtitle: wf.name + ' - ' + applicantName }, sections: [{ widgets: widgets }] } }] }), muteHttpExceptions: true });
+    if (upd.getResponseCode() >= 400) {
+      var errMsg = 'approval card update HTTP ' + upd.getResponseCode() + ' ' + upd.getContentText().substring(0, 300);
+      Logger.log(errMsg);
+      try { notifyAdminOnError_(new Error(errMsg), 'updateApprovalCard_'); } catch (e2) {}
+    }
+  } catch (err) { Logger.log('カード更新エラー: ' + err.message); try { notifyAdminOnError_(err, 'updateApprovalCard_'); } catch (e3) {} }
 }
 
 function sendThreadReply_(spaceId, messageName, msgTemplate, applicantName, newStatus) {

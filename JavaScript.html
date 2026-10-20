@@ -412,8 +412,12 @@ function renderApproverPicker(preselectedIds){
   var q=(document.getElementById('apkSearch').value||'').toLowerCase();
   var filtered=q?members.filter(function(m){return (m.displayName||'').toLowerCase().indexOf(q)>=0||(m.email||'').toLowerCase().indexOf(q)>=0;}):members;
   var html=filtered.map(function(m){
-    var checked=preselectedIds.indexOf(m.userId)>=0?' checked':'';
-    return '<label style="display:flex;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer" onmouseover="this.style.background=\'var(--c-hover)\'" onmouseout="this.style.background=\'\'"><input type="checkbox" class="apkCbx" data-uid="'+esc(m.userId)+'" data-email="'+esc(m.email||'')+'" onchange="updateApkCount()"'+checked+' style="margin-right:10px"><span style="flex:1"><b>'+esc(m.displayName||'(名前不明)')+'</b>'+(m.email?'<span style="font-size:11px;color:var(--c-text-muted);margin-left:8px">'+esc(m.email)+'</span>':'<span style="font-size:11px;color:var(--c-danger);margin-left:8px">メール未取得</span>')+'</span></label>';
+    var hasEmail=!!m.email;
+    var checked=preselectedIds.indexOf(m.userId)>=0&&hasEmail?' checked':'';
+    var disabled=hasEmail?'':' disabled';
+    var style=hasEmail?'display:flex;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer':'display:flex;align-items:center;padding:6px 8px;border-radius:6px;cursor:not-allowed;opacity:0.55';
+    var hover=hasEmail?'onmouseover="this.style.background=\'var(--c-hover)\'" onmouseout="this.style.background=\'\'"':'';
+    return '<label style="'+style+'" '+hover+' title="'+(hasEmail?'':'メールが取得できないため選択できません')+'"><input type="checkbox" class="apkCbx" data-uid="'+esc(m.userId)+'" data-email="'+esc(m.email||'')+'" onchange="updateApkCount()"'+checked+disabled+' style="margin-right:10px"><span style="flex:1"><b>'+esc(m.displayName||'(名前不明)')+'</b>'+(hasEmail?'<span style="font-size:11px;color:var(--c-text-muted);margin-left:8px">'+esc(m.email)+'</span>':'<span style="font-size:11px;color:var(--c-danger);margin-left:8px">メール未取得（選択不可）</span>')+'</span></label>';
   }).join('');
   document.getElementById('apkList').innerHTML=html||'<div class="empty" style="padding:20px">該当メンバーなし</div>';
   updateApkCount();
