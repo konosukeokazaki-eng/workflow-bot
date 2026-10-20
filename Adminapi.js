@@ -664,7 +664,7 @@ function api_deployButton(wid) {
     execList.forEach(function(sid){
       try { addBotToSpace_(sid); } catch (e) {}
       try {
-        var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sid + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + t }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + wid, card: { header: { title: icon + ' ' + wf.name }, sections: [{ widgets: [{ buttonList: { buttons: [{ text: label, color: COLOR_MAP.blue, onClick: { action: { function: FUNCTION_URL, interaction: 'OPEN_DIALOG', parameters: [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(wid) }] } } }] } }] }] } }] }), muteHttpExceptions: true });
+        var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sid + '/messages', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + t }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + wid, card: { header: { title: icon + ' ' + wf.name }, sections: [{ widgets: [{ buttonList: { buttons: [{ text: label, color: COLOR_MAP.blue, onClick: { action: { function: cardActionFunc_(), interaction: 'OPEN_DIALOG', parameters: [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(wid) }] } } }] } }] }] } }] }), muteHttpExceptions: true });
         var r = JSON.parse(resp.getContentText());
         if (r.name) postedNames.push(r.name);
         else errors.push(sid + ': ' + resp.getContentText());

@@ -28,6 +28,12 @@ var SPREADSHEET_ID = getConfig_('SPREADSHEET_ID', '');
 var FUNCTION_URL   = getConfig_('FUNCTION_URL',   '');
 var CONTACT_EMAIL  = getConfig_('CONTACT_EMAIL',  '');
 var ENV_NAME       = getConfig_('ENV_NAME',       'prod');
+// Chat API 接続モード: 'http' or 'apps_script'
+// カード内ボタンの action.function にセットする値を切り替える。
+// - 'http'       : FUNCTION_URL (本番の Web App URL) を URL として渡す
+// - 'apps_script': 'onCardClick' という Apps Script 関数名を渡す
+var CHAT_CONNECTION_MODE = getConfig_('CHAT_CONNECTION_MODE', 'http');
+function cardActionFunc_() { return CHAT_CONNECTION_MODE === 'apps_script' ? 'onCardClick' : FUNCTION_URL; }
 
 var COLOR_MAP = {
   green:  { red: 0.2, green: 0.7, blue: 0.2, alpha: 1 },

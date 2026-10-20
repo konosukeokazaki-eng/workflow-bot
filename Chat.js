@@ -11,7 +11,7 @@ function handleApplyCommand_(event) {
   if (workflows.length === 1) return buildWorkflowDialog_(workflows[0].id);
   var items = workflows.map(function(wf) { return { text: wf.name, value: String(wf.id), selected: false }; });
   items[0].selected = true;
-  return { action: { navigations: [{ pushCard: { header: { title: '📋 ワークフロー選択', subtitle: '実行するワークフローを選んでください' }, sections: [{ widgets: [{ selectionInput: { label: 'ワークフロー', name: 'workflowId', type: 'DROPDOWN', items: items } }, { buttonList: { buttons: [{ text: '次へ', onClick: { action: { function: FUNCTION_URL, parameters: [{ key: 'actionName', value: 'openWorkflow' }] } } }] } }] }] } }] } };
+  return { action: { navigations: [{ pushCard: { header: { title: '📋 ワークフロー選択', subtitle: '実行するワークフローを選んでください' }, sections: [{ widgets: [{ selectionInput: { label: 'ワークフロー', name: 'workflowId', type: 'DROPDOWN', items: items } }, { buttonList: { buttons: [{ text: '次へ', onClick: { action: { function: cardActionFunc_(), parameters: [{ key: 'actionName', value: 'openWorkflow' }] } } }] } }] }] } }] } };
 }
 
 function openWorkflowDialog_(event) {
@@ -54,7 +54,7 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode) {
         break;
     }
   });
-  widgets.push({ buttonList: { buttons: [{ text: '送信', onClick: { action: { function: FUNCTION_URL, parameters: [{ key: 'actionName', value: 'submitWorkflow' }, { key: 'workflowId', value: String(workflowId) }] } } }] } });
+  widgets.push({ buttonList: { buttons: [{ text: '送信', onClick: { action: { function: cardActionFunc_(), parameters: [{ key: 'actionName', value: 'submitWorkflow' }, { key: 'workflowId', value: String(workflowId) }] } } }] } });
   var icon = (wf.type === '申請・承認') ? '📋' : '📝';
   var card = { header: { title: icon + ' ' + wf.name }, sections: [{ widgets: widgets }] };
   var nav = (navMode === 'update') ? { updateCard: card } : { pushCard: card };
