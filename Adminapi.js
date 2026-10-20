@@ -308,6 +308,9 @@ function api_saveWorkflow(data) {
     if (nameErr) return { success: false, error: nameErr };
     var approverErr = validateEmailList_(data.approvers);
     if (approverErr) return { success: false, error: approverErr };
+    if (data.type === '申請・承認' && !String(data.approvers || '').trim()) {
+      return { success: false, error: '「申請・承認」型は承認者を1名以上設定してください（空の場合、意図しない人物が承認できてしまいます）' };
+    }
     var collabErr = validateEmailList_(data.collaborators);
     if (collabErr) return { success: false, error: '共同編集者: ' + collabErr };
     var urlErr = validateSheetUrl_(data.externalSheet);

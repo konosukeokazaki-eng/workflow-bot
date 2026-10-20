@@ -71,8 +71,8 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode) {
           var itemLabel = itemName + '（数量）';
           if (qp.qtype === 'dropdown') {
             var qopts = qp.qopts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
-            var items = [{ text: '—', value: '' }];
-            qopts.forEach(function(q){ items.push({ text: q, value: q, selected: curVal === q }); });
+            var items = [];
+            qopts.forEach(function(q, qi){ items.push({ text: q, value: q, selected: curVal ? (curVal === q) : (qi === 0) }); });
             widgets.push({ selectionInput: { label: itemLabel, name: key, type: 'DROPDOWN', items: items } });
           } else {
             widgets.push({ textInput: { label: itemLabel, name: key, type: 'SINGLE_LINE', value: curVal, hintText: '半角数字（空欄=未選択）' } });
@@ -253,10 +253,13 @@ function handleApproval_(e) {
     if (statusCol === -1) return htmlPage_('⚠️', 'エラー', 'ステータス列が見つかりません', '#666');
     var currentStatus = sheet.getRange(rowIndex, statusCol).getValue();
     if (currentStatus !== '承認待ち') return htmlPage_('⚠️', '処理済み', 'この申請は既に「' + currentStatus + '」されています', '#666');
+    var currentUser = normalizeEmail_(Session.getActiveUser().getEmail());
     if (wf.approvers) {
-      var currentUser = normalizeEmail_(Session.getActiveUser().getEmail());
       var approverList = wf.approvers.split(',').map(function(a) { return normalizeEmail_(a); });
       if (!currentUser || approverList.indexOf(currentUser) === -1) return htmlPage_('🚫', '権限がありません', '', '#666');
+    } else {
+      // 承認者未設定の過去ワークフローは管理者のみに制限(新規保存は承認者必須のため、ここに来るのは旧データのみ)
+      if (!currentUser || !isAdmin_(currentUser)) return htmlPage_('🚫', '権限がありません', '承認者が設定されていません。管理画面でワークフローに承認者を設定してください。', '#666');
     }
     sheet.getRange(rowIndex, statusCol).setValue(newStatus);
     SpreadsheetApp.flush();
