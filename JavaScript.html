@@ -192,7 +192,16 @@ function renderFields(){
 }
 function renderButtons(){
   if(!currentButtons.length)return '<div style="padding:14px;text-align:center;color:var(--c-text-faint);font-size:12px">ボタン未設定（デフォルトの承認/却下）</div>';
-  return currentButtons.map(function(b,i){return '<div class="btn-card" data-index="'+i+'"><div class="btn-card-header"><div class="btn-card-title"><span class="field-grip mi">drag_indicator</span><span class="btn-color" style="background:'+(COLORS[b.color]||'#888')+'"></span>'+esc(b.name)+'</div><div class="field-actions"><button class="btn btn-sm" onclick="editButton('+i+')">編集</button><button class="btn btn-sm btn-danger" onclick="removeButton('+i+')"><span class="mi" style="font-size:16px">close</span></button></div></div><div class="btn-card-sub">→ 「'+esc(b.status)+'」'+(b.threadReply?' ・<span class="mi" style="font-size:14px">reply</span> 返信':'')+'</div></div>';}).join('');
+  return currentButtons.map(function(b,i){
+    var sub;
+    if(b.type==='launch'){
+      var tgt=(workflows||[]).filter(function(w){return w.id===Number(b.linkedWorkflowId);})[0];
+      sub='→ 起動: 「'+esc(tgt?tgt.name:'(未設定)')+'」'+(b.inheritThread?' ・同じスレッド':'');
+    }else{
+      sub='→ 「'+esc(b.status)+'」'+(b.threadReply?' ・<span class="mi" style="font-size:14px">reply</span> 返信':'');
+    }
+    return '<div class="btn-card" data-index="'+i+'"><div class="btn-card-header"><div class="btn-card-title"><span class="field-grip mi">drag_indicator</span><span class="btn-color" style="background:'+(COLORS[b.color]||'#888')+'"></span>'+esc(b.name)+'</div><div class="field-actions"><button class="btn btn-sm" onclick="editButton('+i+')">編集</button><button class="btn btn-sm btn-danger" onclick="removeButton('+i+')"><span class="mi" style="font-size:16px">close</span></button></div></div><div class="btn-card-sub">'+sub+'</div></div>';
+  }).join('');
 }
 
 /* ============================================================
@@ -278,20 +287,57 @@ function addButton(){showButtonModal(-1)}
 function editButton(i){showButtonModal(i)}
 function removeButton(i){currentButtons.splice(i,1);markDirty();document.getElementById('btnList').innerHTML=renderButtons();initSortable();updatePreview();}
 function showButtonModal(idx){
-  var b=idx>=0?currentButtons[idx]:{name:'',status:'',color:'green',threadReply:false,replyMsg:''};
+  var b=idx>=0?currentButtons[idx]:{name:'',status:'',color:'green',threadReply:false,replyMsg:'',type:'status',linkedWorkflowId:0,inheritThread:false};
+  if(!b.type)b.type='status';
+  var currentWid=currentWfId||0;
+  var wfOptions=(workflows||[]).filter(function(w){return w.id!==currentWid&&w.status==='有効';}).map(function(w){return '<option value="'+w.id+'"'+(Number(b.linkedWorkflowId)===w.id?' selected':'')+'>'+esc(w.name)+'</option>';}).join('');
   var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
-  ov.innerHTML='<div class="modal"><h3>'+(idx>=0?'ボタンの編集':'ボタンの追加')+'</h3><div class="form-row"><div class="form-group"><label>ボタン名</label><input type="text" id="bName" value="'+esc(b.name)+'" placeholder="承認"><div class="error-msg" id="errBName">ボタン名を入力してください</div></div><div class="form-group"><label>ステータス値</label><input type="text" id="bStatus" value="'+esc(b.status)+'" placeholder="承認"><div class="error-msg" id="errBStatus">ステータス値を入力してください</div></div></div><div class="form-group"><label>色</label><div class="color-palette">'+Object.keys(COLORS).map(function(k){return '<div class="color-dot'+(b.color===k?' selected':'')+'" style="background:'+COLORS[k]+'" onclick="selColor(this,\''+k+'\')"></div>';}).join('')+'</div><input type="hidden" id="bColor" value="'+esc(b.color)+'"></div><div class="action-section"><div class="checkbox-row"><input type="checkbox" id="bThread"'+(b.threadReply?' checked':'')+' onchange="toggleBT()"><label for="bThread">スレッドに返信する</label></div><div id="bTMsg" style="'+(b.threadReply?'':'display:none')+';margin-top:8px"><input type="text" id="bReplyMsg" value="'+esc(b.replyMsg)+'" placeholder="{申請者}の申請が{ステータス}されました" style="font-size:12px"></div></div><div style="margin-top:6px;font-size:10px;color:var(--c-text-faint)">変数: {申請者} {ステータス} {ワークフロー}</div><div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveButton('+idx+')">保存</button></div></div>';
+  ov.innerHTML='<div class="modal"><h3>'+(idx>=0?'ボタンの編集':'ボタンの追加')+'</h3>'
+    +'<div class="form-group"><label>ボタン名</label><input type="text" id="bName" value="'+esc(b.name)+'" placeholder="承認"><div class="error-msg" id="errBName">ボタン名を入力してください</div></div>'
+    +'<div class="form-group"><label>色</label><div class="color-palette">'+Object.keys(COLORS).map(function(k){return '<div class="color-dot'+(b.color===k?' selected':'')+'" style="background:'+COLORS[k]+'" onclick="selColor(this,\''+k+'\')"></div>';}).join('')+'</div><input type="hidden" id="bColor" value="'+esc(b.color||'gray')+'"></div>'
+    +'<div class="form-group"><label>ボタンタイプ</label>'
+    +'<label style="display:block;margin:4px 0"><input type="radio" name="bType" value="status"'+(b.type==='status'?' checked':'')+' onchange="toggleBType()"> ステータスを設定（承認・却下など）</label>'
+    +'<label style="display:block;margin:4px 0"><input type="radio" name="bType" value="launch"'+(b.type==='launch'?' checked':'')+' onchange="toggleBType()"> 他のワークフローを起動</label>'
+    +'</div>'
+    +'<div id="bStatusSec" style="'+(b.type==='status'?'':'display:none')+';padding:10px;border:1px solid var(--c-border);border-radius:8px;margin-bottom:8px">'
+      +'<div class="form-group"><label>ステータス値</label><input type="text" id="bStatus" value="'+esc(b.status)+'" placeholder="承認"><div class="error-msg" id="errBStatus">ステータス値を入力してください</div></div>'
+      +'<div class="action-section"><div class="checkbox-row"><input type="checkbox" id="bThread"'+(b.threadReply?' checked':'')+' onchange="toggleBT()"><label for="bThread">スレッドに返信する</label></div><div id="bTMsg" style="'+(b.threadReply?'':'display:none')+';margin-top:8px"><input type="text" id="bReplyMsg" value="'+esc(b.replyMsg)+'" placeholder="{申請者}の申請が{ステータス}されました" style="font-size:12px"></div></div>'
+      +'<div style="margin-top:6px;font-size:10px;color:var(--c-text-faint)">変数: {申請者} {ステータス} {ワークフロー}</div>'
+    +'</div>'
+    +'<div id="bLaunchSec" style="'+(b.type==='launch'?'':'display:none')+';padding:10px;border:1px solid var(--c-border);border-radius:8px;margin-bottom:8px">'
+      +'<div class="form-group"><label>起動するワークフロー</label><select id="bLinkedWf">'+(wfOptions||'<option value="">(他のワークフローがありません)</option>')+'</select><div class="error-msg" id="errBLinked">起動するワークフローを選択してください</div></div>'
+      +'<div class="checkbox-row"><input type="checkbox" id="bInherit"'+(b.inheritThread?' checked':'')+'><label for="bInherit">起動したワークフローの送信カードを同じスレッドに投稿する</label></div>'
+      +'<div style="margin-top:6px;font-size:10px;color:var(--c-text-faint)">連鎖は最大3階層までです（それ以上は投稿されません）。</div>'
+    +'</div>'
+    +'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveButton('+idx+')">保存</button></div>'
+    +'</div>';
   document.body.appendChild(ov);
 }
 function selColor(el,c){document.querySelectorAll('.color-dot').forEach(function(d){d.classList.remove('selected')});el.classList.add('selected');document.getElementById('bColor').value=c;}
 function toggleBT(){document.getElementById('bTMsg').style.display=document.getElementById('bThread').checked?'':'none';}
+function toggleBType(){
+  var t=document.querySelector('input[name=bType]:checked').value;
+  document.getElementById('bStatusSec').style.display=(t==='status')?'':'none';
+  document.getElementById('bLaunchSec').style.display=(t==='launch')?'':'none';
+}
 function saveButton(idx){
-  var n=document.getElementById('bName').value.trim(),s=document.getElementById('bStatus').value.trim();
+  var n=document.getElementById('bName').value.trim();
+  var t=document.querySelector('input[name=bType]:checked').value;
   var ok=true;
   if(!n){showError('errBName');ok=false;}else hideError('errBName');
-  if(!s){showError('errBStatus');ok=false;}else hideError('errBStatus');
+  var b={name:n,color:document.getElementById('bColor').value||'gray',type:t,order:idx>=0?currentButtons[idx].order:currentButtons.length+1};
+  if(t==='status'){
+    var s=document.getElementById('bStatus').value.trim();
+    if(!s){showError('errBStatus');ok=false;}else hideError('errBStatus');
+    b.status=s;b.threadReply=document.getElementById('bThread').checked;b.replyMsg=document.getElementById('bReplyMsg')?document.getElementById('bReplyMsg').value:'';
+    b.linkedWorkflowId=0;b.inheritThread=false;
+  }else{
+    var lid=document.getElementById('bLinkedWf').value;
+    if(!lid){showError('errBLinked');ok=false;}else hideError('errBLinked');
+    b.linkedWorkflowId=Number(lid||0);b.inheritThread=document.getElementById('bInherit').checked;
+    b.status='';b.threadReply=false;b.replyMsg='';
+  }
   if(!ok)return;
-  var b={name:n,status:s,color:document.getElementById('bColor').value,threadReply:document.getElementById('bThread').checked,replyMsg:document.getElementById('bReplyMsg')?document.getElementById('bReplyMsg').value:'',order:idx>=0?currentButtons[idx].order:currentButtons.length+1};
   if(idx>=0)currentButtons[idx]=b;else currentButtons.push(b);
   markDirty();document.querySelector('.modal-overlay').remove();document.getElementById('btnList').innerHTML=renderButtons();initSortable();updatePreview();
 }
@@ -322,7 +368,7 @@ function save(){
     collaborators:val('wfCollaborators')||'',
     externalSheet:document.getElementById('wfExtCheck')&&document.getElementById('wfExtCheck').checked?val('wfExtSheet'):'',
     fields:currentFields.map(function(f,i){return{fieldId:f.fieldId||'',name:f.name,type:f.type,options:f.options,required:f.required,order:i+1}}),
-    buttons:currentButtons.map(function(b,i){return{name:b.name,status:b.status,color:b.color,threadReply:b.threadReply,replyMsg:b.replyMsg,order:i+1}})};
+    buttons:currentButtons.map(function(b,i){return{name:b.name,status:b.status||'',color:b.color,threadReply:!!b.threadReply,replyMsg:b.replyMsg||'',order:i+1,type:b.type||'status',linkedWorkflowId:Number(b.linkedWorkflowId||0),inheritThread:!!b.inheritThread}})};
   // 既存ワークフロー編集時は先に差分をプレビューし、破壊的変更＋既存データがあれば確認ダイアログを出す
   if(!data.id){ doSaveWorkflow(data); return; }
   showLoading('差分を確認中...');

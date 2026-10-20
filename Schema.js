@@ -124,6 +124,18 @@ function ensureDataSheetSchema_(ds, isApproval) {
   return added;
 }
 
+// _ボタン設定 シートのヘッダー行に新規列(タイプ/連動ワークフローID/スレッド継承)を補完する。
+// 旧版で作成されたシートに後方互換のため列を追加する。
+function ensureButtonsSchema_(bt) {
+  if (!bt) return;
+  var want = ['ワークフローID','ボタン名','ステータス値','色','順番','スレッド返信','返信メッセージ','DM通知','DMメッセージ','タイプ','連動ワークフローID','スレッド継承'];
+  if (bt.getLastRow() === 0) { bt.appendRow(want); return; }
+  var cur = bt.getRange(1, 1, 1, Math.max(bt.getLastColumn(), 1)).getValues()[0];
+  for (var i = cur.length; i < want.length; i++) {
+    bt.getRange(1, i + 1).setValue(want[i]);
+  }
+}
+
 // データシートで「メッセージ名」列の位置を返す(1-indexed)。なければ -1。
 function findMessageCol_(ds) {
   if (!ds || ds.getLastColumn() === 0) return -1;

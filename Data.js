@@ -67,9 +67,21 @@ function getWorkflowButtons_(wid) {
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheet = ss.getSheetByName(SHEET_BUTTONS);
     if (!sheet || sheet.getLastRow() < 2) return [];
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 9).getValues();
+    var lastCol = Math.max(9, sheet.getLastColumn());
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
     var btns = [];
-    data.forEach(function(r) { if (r[0] === wid) btns.push({ name: r[1], status: r[2], color: r[3], order: r[4], threadReply: r[5] === true || r[5] === 'TRUE' || r[5] === 'true', replyMsg: r[6] || '' }); });
+    var truthy = function(v) { return v === true || v === 'TRUE' || v === 'true'; };
+    data.forEach(function(r) {
+      if (r[0] !== wid) return;
+      var type = String(r[9] || '').trim() || 'status'; // 列J: 空=旧データは status
+      btns.push({
+        name: r[1], status: r[2], color: r[3], order: r[4],
+        threadReply: truthy(r[5]), replyMsg: r[6] || '',
+        type: type,
+        linkedWorkflowId: r[10] ? Number(r[10]) : 0, // 列K
+        inheritThread: truthy(r[11]) // 列L
+      });
+    });
     btns.sort(function(a, b) { return a.order - b.order; });
     return btns;
   } catch (err) { recordDataError_('getWorkflowButtons_', err); return []; }

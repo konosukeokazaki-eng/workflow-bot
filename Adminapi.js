@@ -438,9 +438,28 @@ function api_saveWorkflow(data) {
       flSheet.appendRow([wid, n.name, n.type, n.options || '', n.required || false, idx + 1, fid, false, dataCol]);
     });
 
-    // ボタン設定
-    if (btSheet.getLastRow() >= 2) { var bd = btSheet.getRange(2, 1, btSheet.getLastRow() - 1, 9).getValues(); for (var k = bd.length - 1; k >= 0; k--) { if (bd[k][0] === wid) btSheet.deleteRow(k + 2); } }
-    if (data.buttons) data.buttons.forEach(function(b, idx2) { btSheet.appendRow([wid, b.name, b.status, b.color, idx2 + 1, b.threadReply || false, b.replyMsg || '', false, '']); });
+    // ボタン設定（列J=type, K=連動ワークフローID, L=スレッド継承）
+    ensureButtonsSchema_(btSheet);
+    if (btSheet.getLastRow() >= 2) { var bd = btSheet.getRange(2, 1, btSheet.getLastRow() - 1, 12).getValues(); for (var k = bd.length - 1; k >= 0; k--) { if (bd[k][0] === wid) btSheet.deleteRow(k + 2); } }
+    if (data.buttons) data.buttons.forEach(function(b, idx2) {
+      var btype = (b.type === 'launch') ? 'launch' : 'status';
+      var linkedId = 0;
+      if (btype === 'launch') {
+        linkedId = Number(b.linkedWorkflowId || 0);
+        if (!linkedId || linkedId === wid) throw new Error('ボタン「' + (b.name || '') + '」の連動ワークフローが不正です');
+      }
+      btSheet.appendRow([
+        wid, b.name,
+        btype === 'launch' ? '' : (b.status || ''),
+        b.color || 'gray', idx2 + 1,
+        btype === 'launch' ? false : !!b.threadReply,
+        btype === 'launch' ? '' : (b.replyMsg || ''),
+        false, '',
+        btype,
+        linkedId || '',
+        btype === 'launch' ? !!b.inheritThread : false
+      ]);
+    });
 
     // 外部シート
     if (data.externalSheet) {
