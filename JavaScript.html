@@ -433,7 +433,14 @@ function purgeArchive(id,name){
 function deployButton(){
   if(!currentWfId)return;
   showLoading('設置中...');
-  run('api_deployButton',currentWfId,function(r){showToast(r.success?'設置しました':'エラー: '+(r.error||''));});
+  google.script.run.withSuccessHandler(function(r){
+    hideLoading();
+    if(r.success){
+      showToast(r.warning?('一部設置に失敗: '+r.warning):'設置しました');
+    } else {
+      showToast('エラー: '+(r.error||''));
+    }
+  }).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_deployButton(currentWfId);
 }
 function cancel(){
   if(isDirty&&!confirm('未保存の変更があります。破棄しますか？'))return;
