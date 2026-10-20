@@ -46,6 +46,7 @@ function openWorkflowDialog_(event) {
       }
     } catch (e) { Logger.log('parent resolve skip: ' + e.message); }
   }
+  Logger.log('openWorkflowDialog params=' + JSON.stringify(params) + ' resolved inheritFrom=' + inheritFrom);
   if (chain > 3) return createMessage_('連鎖上限(3階層)を超えています。');
   return buildWorkflowDialog_(parseInt(wid, 10), chain, inheritFrom);
 }
@@ -252,8 +253,15 @@ function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, 
     }
     if (!sendTo) throw new Error('送信先スペースが特定できません');
     var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sendTo + '/messages' + urlSuffix, { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+    Logger.log('sendApprovalCard inheritFrom=' + inheritFrom + ' sendTo=' + sendTo + ' threadName=' + (payload.thread && payload.thread.name) + ' http=' + resp.getResponseCode());
     var result = JSON.parse(resp.getContentText());
-    if (result.name) { SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(wf.name).getRange(rowIndex, SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(wf.name).getLastColumn()).setValue(result.name); }
+    if (result.name) {
+      var ds2 = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(wf.name);
+      var hdrs2 = ds2.getRange(1, 1, 1, ds2.getLastColumn()).getValues()[0];
+      var mcol = -1;
+      for (var hi2 = 0; hi2 < hdrs2.length; hi2++) if (hdrs2[hi2] === 'メッセージ名') { mcol = hi2 + 1; break; }
+      if (mcol > 0) ds2.getRange(rowIndex, mcol).setValue(result.name);
+    }
   } catch (err) { Logger.log('カード送信エラー: ' + err.message); }
 }
 
