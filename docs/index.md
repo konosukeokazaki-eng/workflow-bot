@@ -10,6 +10,7 @@ Google Chat 上でワークフロー（申請・承認・記録）を実行す�
 
 - [プライバシーポリシー](./privacy-policy.html)
 - [利用規約](./terms-of-service.html)
+- [サポート](./support.html)
 
 ## 提供元
 
