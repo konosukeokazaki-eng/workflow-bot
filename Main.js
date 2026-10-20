@@ -2,7 +2,7 @@
 // Main.gs - 定数 + doPost + doGet + ルーティング
 // ============================================================
 
-var VERSION = '1.5.13';
+var VERSION = '1.5.14';
 
 var SHEET_SETTINGS   = '_設定';
 var SHEET_FIELDS     = '_項目設定';
@@ -81,10 +81,28 @@ function doPost(e) {
 }
 
 // Apps Script ネイティブ Chat トリガー (Chat API 接続が「Apps Script」の場合に呼ばれる)
-function onAppCommand(event) { Logger.log('onAppCommand'); return dispatchChatEvent_(event); }
-function onCardClick(event)  { Logger.log('onCardClick');  return dispatchChatEvent_(event); }
-function onMessage(event)    { Logger.log('onMessage');    return dispatchChatEvent_(event); }
-function onAddedToSpace(event) { Logger.log('onAddedToSpace'); return dispatchChatEvent_(event); }
+// HTTP モードの応答形式(action.navigations / hostAppDataAction) を Apps Script 向け
+// (actionResponse.dialogAction / 素の message オブジェクト) に変換して返す。
+function toAppsScriptResponse_(response) {
+  if (!response) return {};
+  if (response.action && response.action.navigations && response.action.navigations.length) {
+    var nav = response.action.navigations[0];
+    if (nav.pushCard || nav.updateCard) {
+      var card = nav.pushCard || nav.updateCard;
+      var type = nav.updateCard ? 'UPDATE_DIALOG' : 'DIALOG';
+      return { actionResponse: { type: type, dialogAction: { dialog: { body: card } } } };
+    }
+  }
+  if (response.hostAppDataAction && response.hostAppDataAction.chatDataAction) {
+    var cda = response.hostAppDataAction.chatDataAction;
+    if (cda.createMessageAction && cda.createMessageAction.message) return cda.createMessageAction.message;
+  }
+  return response;
+}
+function onAppCommand(event) { Logger.log('onAppCommand'); return toAppsScriptResponse_(dispatchChatEvent_(event)); }
+function onCardClick(event)  { Logger.log('onCardClick');  return toAppsScriptResponse_(dispatchChatEvent_(event)); }
+function onMessage(event)    { Logger.log('onMessage');    return toAppsScriptResponse_(dispatchChatEvent_(event)); }
+function onAddedToSpace(event) { Logger.log('onAddedToSpace'); return toAppsScriptResponse_(dispatchChatEvent_(event)); }
 function onRemovedFromSpace(event) { Logger.log('onRemovedFromSpace'); return {}; }
 
 function doGet(e) {
