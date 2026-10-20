@@ -98,7 +98,7 @@ function describeFieldDiff_(diff) {
   if (diff.deleted.length) parts.push('削除:' + diff.deleted.map(function(d){return d.name;}).join('/'));
   if (diff.renamed.length) parts.push('改名:' + diff.renamed.map(function(r){return r.old.name+'→'+r.newField.name;}).join('/'));
   if (diff.reordered) parts.push('並替あり');
-  return parts.length ? parts.join(' ') : '変更なし';
+  return parts.length ? parts.join(' ') : '';
 }
 
 // データシートに必須のシステム列(タイムスタンプ/送信者/送信者メール/(承認型ならステータス)/メッセージ名)が
