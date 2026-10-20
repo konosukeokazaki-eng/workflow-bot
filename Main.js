@@ -2,7 +2,7 @@
 // Main.gs - 定数 + doPost + doGet + ルーティング
 // ============================================================
 
-var VERSION = '1.5.18';
+var VERSION = '1.5.19';
 
 var SHEET_SETTINGS   = '_設定';
 var SHEET_FIELDS     = '_項目設定';
@@ -75,8 +75,9 @@ function dispatchChatEvent_(event) {
 
 function doPost(e) {
   var event = JSON.parse(e.postData.contents);
-  Logger.log('EVENT: ' + JSON.stringify(event).substring(0, 1000));
+  Logger.log('EVENT: ' + JSON.stringify(event).substring(0, 5000));
   var result = dispatchChatEvent_(event);
+  Logger.log('RESP: ' + JSON.stringify(result).substring(0, 5000));
   return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
 }
 
