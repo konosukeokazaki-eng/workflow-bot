@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Workflow Bot 運用マニュアル</title>
+<style>
+  :root { --fg:#1f2328; --muted:#57606a; --bg:#fff; --panel:#f6f8fa; --border:#d0d7de; --accent:#1a73e8; --warn:#b06000; --danger:#c62828; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Hiragino Sans','Noto Sans JP',sans-serif; color:var(--fg); background:var(--bg); line-height:1.7; }
+  .wrap { max-width:900px; margin:0 auto; padding:40px 24px 80px; }
+  header.top { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:16px; margin-bottom:24px; }
+  header.top h1 { margin:0; font-size:24px; }
+  header.top .ver { color:var(--muted); font-size:13px; }
+  nav.toc { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px 24px; margin-bottom:32px; }
+  nav.toc ol { margin:0; padding-left:20px; }
+  nav.toc a { color:var(--accent); text-decoration:none; }
+  nav.toc a:hover { text-decoration:underline; }
+  h2 { margin-top:48px; padding-bottom:6px; border-bottom:2px solid var(--border); font-size:20px; }
+  h3 { margin-top:28px; font-size:16px; }
+  h4 { margin-top:20px; font-size:14px; color:var(--muted); }
+  p, li { font-size:14px; }
+  code { background:var(--panel); padding:2px 6px; border-radius:4px; font-size:13px; font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; }
+  pre { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:12px 16px; overflow-x:auto; font-size:13px; }
+  table { border-collapse:collapse; width:100%; margin:12px 0; font-size:13px; }
+  th, td { border:1px solid var(--border); padding:8px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--panel); font-weight:600; }
+  .note { background:#eef6ff; border-left:4px solid var(--accent); padding:10px 16px; margin:12px 0; border-radius:0 6px 6px 0; font-size:13px; }
+  .warn { background:#fff7e6; border-left:4px solid var(--warn); padding:10px 16px; margin:12px 0; border-radius:0 6px 6px 0; font-size:13px; }
+  .danger { background:#fdecea; border-left:4px solid var(--danger); padding:10px 16px; margin:12px 0; border-radius:0 6px 6px 0; font-size:13px; }
+  kbd { background:#fafbfc; border:1px solid var(--border); border-bottom-width:2px; border-radius:4px; padding:2px 6px; font-size:12px; font-family:monospace; }
+  .back-top { position:fixed; right:24px; bottom:24px; background:var(--accent); color:#fff; padding:10px 14px; border-radius:999px; text-decoration:none; font-size:13px; box-shadow:0 2px 8px rgba(0,0,0,.2); }
+  footer { margin-top:48px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); padding-top:16px; }
+</style>
+</head>
+<body>
+<a class="back-top" href="#top">↑ 先頭へ</a>
+<div class="wrap" id="top">
+
+<header class="top">
+  <h1>Workflow Bot 運用マニュアル</h1>
+  <span class="ver">v<?!= appVersion ?></span>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#about">1. このツールについて</a></li>
+    <li><a href="#roles">2. 登場人物と権限</a></li>
+    <li><a href="#applicant">3. 申請者向け：申請の出し方</a></li>
+    <li><a href="#approver">4. 承認者向け：承認・却下の仕方</a></li>
+    <li><a href="#create">5. 管理者向け：ワークフローの作成</a></li>
+    <li><a href="#deploy">6. Chat への配置</a></li>
+    <li><a href="#advanced">7. 高度な設定（連動ボタン・外部シート）</a></li>
+    <li><a href="#data">8. データとスプレッドシート</a></li>
+    <li><a href="#admins">9. 管理者の追加・権限</a></li>
+    <li><a href="#archive">10. アーカイブと復元</a></li>
+    <li><a href="#trouble">11. 困ったときは</a></li>
+    <li><a href="#spec">12. 仕様サマリー</a></li>
+  </ol>
+</nav>
+
+<h2 id="about">1. このツールについて</h2>
+<p>Workflow Bot は Google Chat 上で稼働する申請・承認／定型文送信ツールです。従来メールやチャットで口頭でやり取りしていた申請フローを、スペース内のボタン1つで開始でき、結果はすべてスプレッドシートに自動保存されます。</p>
+
+<h3>できること</h3>
+<ul>
+  <li>Chat スペースに「申請する」ボタンを配置し、ダイアログで入力させる</li>
+  <li>申請内容を承認者宛てにカードで届け、承認/却下などを記録する</li>
+  <li>複数の入力項目（テキスト・プルダウン・チェックボックス・日付・数量付きチェック）を自由に組み合わせる</li>
+  <li>申請承認→別のワークフロー起動の連動（最大3階層）</li>
+  <li>結果を外部スプレッドシートにも同時書き込み</li>
+</ul>
+
+<h3>2種類のワークフロー</h3>
+<table>
+  <tr><th>種類</th><th>用途</th><th>例</th></tr>
+  <tr><td>申請・承認</td><td>誰かの承認が必要な手続き。ステータス（承認待ち→承認／却下）が記録される</td><td>有給申請、経費精算、備品購入</td></tr>
+  <tr><td>定型文送信</td><td>承認不要で内容を記録・共有したい連絡</td><td>日報、来客記録、業務連絡</td></tr>
+</table>
+
+<h2 id="roles">2. 登場人物と権限</h2>
+<table>
+  <tr><th>役割</th><th>できること</th></tr>
+  <tr><td>オーナー (owner)</td><td>全ワークフローの作成/編集/削除、管理者の追加/削除、スプレッドシートへの直接アクセス</td></tr>
+  <tr><td>エディタ (editor)</td><td>全ワークフローの作成/編集。削除は自分が作成したもの、または共同編集者に指定されたもののみ</td></tr>
+  <tr><td>メンバー (member)</td><td>自分が作成したワークフロー、または共同編集者に指定されたワークフローのみ閲覧/編集可能</td></tr>
+  <tr><td>申請者</td><td>Chat 上でボタンを押して申請を出す。管理画面にはアクセスできない</td></tr>
+  <tr><td>承認者</td><td>届いた申請を承認/却下する。各ワークフロー編集画面でメール単位に指定</td></tr>
+</table>
+
+<h2 id="applicant">3. 申請者向け：申請の出し方</h2>
+<h3>方法1：ボタンから申請する</h3>
+<ol>
+  <li>指定された Google Chat のスペースを開きます</li>
+  <li>「申請する」などのボタンカードを探してクリック</li>
+  <li>ダイアログで必要項目を入力（「*」付きは必須）</li>
+  <li>「送信」ボタンを押す</li>
+</ol>
+
+<h3>方法2：/apply コマンドから</h3>
+<ol>
+  <li>Chat メッセージ欄で <code>/apply</code> と入力</li>
+  <li>そのスペースで利用可能なワークフロー一覧が出るので、目的のものを選ぶ</li>
+  <li>以降はボタン操作と同じ</li>
+</ol>
+
+<h3>送信後の流れ</h3>
+<ul>
+  <li><b>申請・承認型</b>：送信先スペース（未設定なら実行スペース）に承認カードが届き、承認者が処理すると結果がカードに反映されます</li>
+  <li><b>定型文送信型</b>：送信先スペースに投稿されて完了</li>
+</ul>
+
+<div class="note">必須項目が未入力のまま送信した場合、ダイアログは閉じずに警告が表示されるので、埋め直して再送してください。</div>
+
+<h2 id="approver">4. 承認者向け：承認・却下の仕方</h2>
+<ol>
+  <li>送信先スペース（未設定時は申請元の実行スペース）に「🔔 新しい申請」カードが届きます</li>
+  <li>カード内の申請内容を確認</li>
+  <li>下部のボタン（「承認」「却下」等、ワークフロー定義によって異なる）を押す</li>
+  <li>ブラウザで結果画面が開き、処理が完了</li>
+  <li>Chat に戻るとカードのステータス表示が更新されています</li>
+</ol>
+
+<div class="warn">承認用リンクには有効期限（発行から30日）があります。期限切れの場合は申請者に再申請を依頼してください。</div>
+<div class="warn">シークレット/プライベートブラウザで開くと認証されず「権限がありません」になります。通常ブラウザで会社の Google アカウントがプライマリにログインされている状態で開いてください。</div>
+<div class="warn">承認者が1名も登録されていないワークフローは、管理者であっても承認できません。必ず最低1名の承認者を登録してください。</div>
+
+<h2 id="create">5. 管理者向け：ワークフローの作成</h2>
+<p>管理画面にアクセスし、左サイドバー「新規」を押すとフォームが開きます。<b>①基本情報 / ②フォーム項目 / ③承認・通知（または通知設定）</b>の3つのセクションに分かれています。</p>
+
+<h3>①基本情報</h3>
+<ul>
+  <li><b>ワークフロー名</b>：スプレッドシートのシート名にもなります。80文字以内、<code>/ \ ? * [ ] :</code> は使用不可</li>
+  <li><b>種類</b>：「申請・承認」か「定型文送信」</li>
+  <li><b>実行スペース（必須・複数選択可）</b>：申請ボタンを設置する Chat スペース</li>
+  <li><b>送信先スペース（任意）</b>：承認カード/定型文の投稿先。<b>空欄なら実行スペースにそのまま返信</b>されるため、スペースごとに通知先を分けたい場合は空欄推奨</li>
+  <li><b>説明文（任意）</b>：申請ダイアログのヘッダに表示</li>
+</ul>
+
+<h3>②フォーム項目</h3>
+<p>「＋項目を追加」で入力項目を追加します。</p>
+<table>
+  <tr><th>種類</th><th>用途・備考</th></tr>
+  <tr><td>テキスト（1行）</td><td>氏名、金額、短い理由</td></tr>
+  <tr><td>テキスト（複数行）</td><td>詳細な説明、備考</td></tr>
+  <tr><td>プルダウン</td><td>選択肢をカンマ区切りで入力。1つだけ選ばせる</td></tr>
+  <tr><td>チェックボックス</td><td>選択肢をカンマ区切り。複数選択可</td></tr>
+  <tr><td>数量付きチェック</td><td>各選択肢に数量を入力させる（例：「ペン×3, ノート×1」）。数量入力は半角数字直接入力か、カンマ区切りのプルダウンから選択可。<b>数量「0」は未選択扱い</b>で記録に残りません</td></tr>
+  <tr><td>日付</td><td>単一日付のピッカー</td></tr>
+</table>
+<p>「必須」にチェックを入れると、未入力では送信できません。</p>
+
+<h3>③承認・通知（申請・承認型）</h3>
+<ul>
+  <li><b>承認者（必須）</b>：1名以上必須。「メンバーから選択」で送信先スペースの参加者一覧から選べる。メール直接入力も可</li>
+  <li><b>@メンション通知</b>：「メンバーから選択」で選んだ承認者には承認カード投稿時に Chat の @メンション通知が飛びます（メール直接入力だけでは通知は飛びません）</li>
+  <li><b>メンション文言</b>：デフォルトは「承認をお願いします」。変数 <code>{申請者}</code>、<code>{ワークフロー}</code> が使えます</li>
+  <li><b>アクションボタン</b>：次節で詳述</li>
+  <li><b>外部スプレッドシート連携</b>：別のシートにも同時書き込みする場合に URL を指定</li>
+</ul>
+
+<h3>アクションボタンの2種類</h3>
+<table>
+  <tr><th>タイプ</th><th>挙動</th><th>設定項目</th></tr>
+  <tr>
+    <td><b>ステータスを設定</b><br>（通常ボタン）</td>
+    <td>押下でシートの「ステータス」列を指定値に更新し、カードも更新する</td>
+    <td>ボタン名、ステータス値、色、スレッド返信ON/OFF、返信メッセージ</td>
+  </tr>
+  <tr>
+    <td><b>他のワークフローを起動</b><br>（連動ボタン）</td>
+    <td>押下で別のワークフローの申請ダイアログを即座に開く。<b>ステータスは変更しない</b></td>
+    <td>連動先ワークフロー（事前に作成要）、スレッド継承ON/OFF</td>
+  </tr>
+</table>
+
+<div class="note">「スレッド返信」ON の場合、ステータス確定後に承認カードのスレッド内へ自動返信を投稿します。<code>{申請者}</code>、<code>{ステータス}</code> を使えます。</div>
+
+<h3>保存</h3>
+<p>右下「保存」で確定。入力漏れがあるセクションのチップに赤バッジが付き、該当セクションへ自動遷移します。保存した時点では Chat にはまだ反映されません。次節の「配置」を行ってください。</p>
+
+<h2 id="deploy">6. Chat への配置</h2>
+<ol>
+  <li>左リストから配置したいワークフローを選ぶ</li>
+  <li>右上「配置」ボタンを押す</li>
+  <li>登録された実行スペース全てに申請ボタンカードが自動投稿される</li>
+</ol>
+
+<h3>再配置</h3>
+<p>設定変更後にもう一度「配置」を押すと、古いカードは削除され新しいカードに置き換わります。ボタン名や項目を変えたら必ず再配置してください。</p>
+
+<h3>Bot のスペース参加</h3>
+<p>初めてのスペースへの配置時は Workflow Bot が自動で参加します。参加できなかった場合は保存時に警告が出ますので、スペース管理者に手動招待を依頼してください。</p>
+
+<h3>有効/無効の切り替え</h3>
+<p>サイドバーの各ワークフローのトグルで一時無効化できます。無効にすると <code>/apply</code> 一覧に出なくなり、既存配置のボタンを押しても動作しなくなります。</p>
+
+<h2 id="advanced">7. 高度な設定</h2>
+
+<h3>連動ボタン（他のワークフローを起動）</h3>
+<p>承認カードから次のワークフローを起動して多段フローを組めます。</p>
+<ul>
+  <li><b>連動先ワークフロー</b>：先に連動先ワークフローを「新規作成→配置」まで済ませておきます。連動元の編集画面で「他のワークフローを起動」タイプのボタンを追加し、連動先を選択</li>
+  <li><b>スレッド継承 ON</b>：起動した連動先ワークフローのカード（承認カード or 定型文）は、親ワークフローの承認カードと同じスレッドに投稿されます。1件の依頼として履歴を追いやすい</li>
+  <li><b>スレッド継承 OFF</b>：連動先ワークフロー自身の送信先スペースに新規メッセージとして投稿されます。独立した件として扱いたい場合に使用</li>
+  <li><b>連鎖上限</b>：3階層まで（親→子→孫）。それ以上の連動は拒否されます（無限ループ防止）</li>
+</ul>
+
+<div class="note">運用例：「購入申請」で承認後、「発注依頼」ワークフローを連動起動（スレッド継承ON）→ 同じスレッドで発注依頼が流れ、全履歴が1件のスレッドにまとまる。</div>
+
+<h3>外部スプレッドシート連携</h3>
+<p>各部署が既に使っているスプレッドシートに申請データを同時書き込みできます。</p>
+<ol>
+  <li>外部スプレッドシートを開き、右上「共有」から Workflow Bot のサービスアカウントメールを編集権限で追加</li>
+  <li>管理画面のワークフロー編集で「外部スプレッドシート」欄に URL を入力</li>
+  <li>保存時に接続確認が走り、問題があれば警告が出ます</li>
+</ol>
+<p>外部シートにはワークフロー名と同じシートが自動作成され、以降のすべての申請が両方に書き込まれます。</p>
+
+<h2 id="data">8. データとスプレッドシート</h2>
+<p>すべてのデータはマスタースプレッドシートに保存されます。「管理データ」ボタン（オーナーのみ表示）から直接開けます。</p>
+
+<table>
+  <tr><th>シート名</th><th>内容</th></tr>
+  <tr><td><code>_設定</code></td><td>ワークフロー一覧と設定</td></tr>
+  <tr><td><code>_項目設定</code></td><td>各ワークフローの入力項目（fieldId/dataCol 管理含む）</td></tr>
+  <tr><td><code>_ボタン設定</code></td><td>各ワークフローのアクションボタン（タイプ/連動設定含む）</td></tr>
+  <tr><td><code>_管理者</code></td><td>管理画面にアクセス可能なユーザーと権限（owner/editor/member）</td></tr>
+  <tr><td><code>_監査ログ</code></td><td>誰がいつ何をしたかの履歴（自動記録）</td></tr>
+  <tr><td>（ワークフロー名）</td><td>そのワークフローの申請データ本体</td></tr>
+</table>
+
+<div class="danger"><code>_</code> で始まるシステム用シートは直接編集しないでください。特に <code>_項目設定</code> の <code>fieldId</code> / <code>dataCol</code> を変更するとデータ列がズレます。確認のみに使用してください。</div>
+
+<h3>データシートの構造</h3>
+<p>各ワークフローのデータシートは以下の列構造です。</p>
+<pre>タイムスタンプ | 送信者 | 送信者メール | &lt;入力項目1&gt; | &lt;入力項目2&gt; | ... | ステータス | メッセージ名</pre>
+<ul>
+  <li>「ステータス」列は申請・承認型のみ</li>
+  <li>「メッセージ名」は Chat カードの内部 ID（カード更新・スレッド返信・連動起動で使用）</li>
+  <li>項目を削除してもデータ列は残り（過去データ保全のため）、新しい項目は末尾に追加されます</li>
+</ul>
+
+<h2 id="admins">9. 管理者の追加・権限</h2>
+<ol>
+  <li>左下「管理者」ボタン（オーナーのみ）を開く</li>
+  <li>メールアドレスを入力し、権限（owner/editor/member）を選択して追加</li>
+  <li>「保存」で確定</li>
+</ol>
+
+<div class="danger">自分自身を削除/降格して保存すると、以降この管理画面にアクセスできなくなります。信頼できる別の owner を必ず残してから編集してください。</div>
+
+<h3>権限の違い（詳細）</h3>
+<ul>
+  <li><b>owner</b>：すべての操作が可能。管理者の追加/削除、マスタースプレッドシート直接アクセス、全ワークフローの削除</li>
+  <li><b>editor</b>：全ワークフローの作成/編集・配置。削除は自分が作成したものと共同編集者指定されたもののみ</li>
+  <li><b>member</b>：自分が作成したか、共同編集者に指定されたワークフローのみ閲覧/編集/削除</li>
+</ul>
+
+<h2 id="archive">10. アーカイブと復元</h2>
+<p>削除したワークフローは直ちに消えず、30日間アーカイブに保管されます。</p>
+<ul>
+  <li>左下「アーカイブ」ボタンから一覧表示</li>
+  <li>「復元」で元の状態に戻せる</li>
+  <li>30日経過すると自動完全削除</li>
+  <li>「完全削除」ボタンで即時削除も可能（取り消し不可）</li>
+</ul>
+
+<div class="warn">同名のワークフローを再作成したい場合、同名のアーカイブがあると「既に存在します」エラーになります。アーカイブ内の該当を「完全削除」してから再作成してください。</div>
+
+<h2 id="trouble">11. 困ったときは</h2>
+
+<h3>管理画面にログインできない</h3>
+<ol>
+  <li>URL が <code>script.google.com/a/macros/cmind-co.jp/s/…</code> の形式か（ドメイン付き URL でないと権限判定が働きません）</li>
+  <li>ブラウザのプライマリアカウントが会社の Google アカウントか</li>
+  <li><code>_管理者</code> シートに自分のメールが登録されているか（既存管理者に依頼）</li>
+  <li>管理者追加直後は最大5分の反映ラグ</li>
+</ol>
+
+<h3>申請したのに Chat にカードが出ない</h3>
+<p>送信先スペースに Bot が未参加の可能性大。該当スペースのメンバー一覧で「Workflow Bot」の有無を確認し、無ければ手動追加。その後、管理画面で該当ワークフローの「保存」を押し直すと再チェックされます。</p>
+
+<h3>承認ボタンを押しても「権限がありません」</h3>
+<ol>
+  <li>「承認者」欄のメールアドレスが正しいか（全角/半角、余分な空白）</li>
+  <li>プライマリアカウントが会社の Google アカウントか</li>
+  <li>シークレット/プライベートブラウザで開いていないか</li>
+</ol>
+
+<h3>承認ボタンを押しても「無効なリクエスト」</h3>
+<p>承認リンクは発行から30日で失効します。申請者に再申請を依頼してください。</p>
+
+<h3>連動ボタンを押しても次のワークフローが起動しない</h3>
+<ol>
+  <li>連動先ワークフローが「有効」になっているか</li>
+  <li>連動が3階層を超えていないか</li>
+  <li>連動ボタンは親ワークフローのステータスを変えません。ステータス更新が必要な場合は通常ボタンと併用してください</li>
+</ol>
+
+<h3>スレッド継承 ON なのに新規メッセージになる</h3>
+<p>親ワークフローの承認カードの「メッセージ名」列が記録されていない可能性があります。該当行をスプレッドシートで確認してください。空の場合、親カード投稿時にエラーが発生しています。管理者にログの確認を依頼してください。</p>
+
+<h3>データシートの列を誤って削除した</h3>
+<p>「タイムスタンプ」「送信者」「送信者メール」「ステータス」「メッセージ名」の各システム列は、次回申請/承認処理時に自動的に末尾に復旧されます。ただし過去データとの列対応はズレるため、可能な限り手動編集は避けてください。</p>
+
+<h3>それでも解決しない場合</h3>
+<p>以下を控えて管理者（<a href="mailto:konosuke.okazaki@cmind-co.jp">konosuke.okazaki@cmind-co.jp</a>）にご連絡ください。</p>
+<ul>
+  <li>発生日時</li>
+  <li>操作内容（可能ならスクリーンショット）</li>
+  <li>ワークフロー名</li>
+  <li>表示されたエラーメッセージ全文</li>
+</ul>
+
+<h2 id="spec">12. 仕様サマリー</h2>
+<table>
+  <tr><th>項目</th><th>値</th></tr>
+  <tr><td>承認リンク有効期限</td><td>30日</td></tr>
+  <tr><td>アーカイブ保持期間</td><td>30日（経過後自動完全削除）</td></tr>
+  <tr><td>ワークフロー連動の最大階層</td><td>3</td></tr>
+  <tr><td>ワークフロー名の文字制限</td><td>80文字、<code>/ \ ? * [ ] :</code> 不可</td></tr>
+  <tr><td>入力項目タイプ</td><td>テキスト(1行)、テキスト(複数行)、プルダウン、チェックボックス、数量付きチェック、日付</td></tr>
+  <tr><td>アクションボタンタイプ</td><td>ステータスを設定、他のワークフローを起動</td></tr>
+  <tr><td>管理者権限</td><td>owner / editor / member の3段階</td></tr>
+  <tr><td>管理者キャッシュTTL</td><td>5分</td></tr>
+</table>
+
+<footer>
+  Workflow Bot v<?!= appVersion ?> ・ 問い合わせ: <a href="mailto:konosuke.okazaki@cmind-co.jp">konosuke.okazaki@cmind-co.jp</a>
+</footer>
+
+</div>
+</body>
+</html>

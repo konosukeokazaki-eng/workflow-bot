@@ -25,6 +25,13 @@ function getAdminPage_() {
   return tpl.evaluate().setTitle('ワークフローBot 管理画面');
 }
 
+// 運用マニュアル HTML を返す。管理者/申請者を問わず閲覧可(認証なし)。
+function renderManualPage_() {
+  var tpl = HtmlService.createTemplateFromFile('Manual');
+  tpl.appVersion = VERSION;
+  return tpl.evaluate().setTitle('Workflow Bot 運用マニュアル').addMetaTag('viewport', 'width=device-width,initial-scale=1');
+}
+
 // 書き込み系 API(api_saveWorkflow / api_deleteWorkflow / api_restoreWorkflow /
 // api_toggleStatus / api_saveAdmins)後に必ず呼ぶ。
 function invalidateRenderCache_() {

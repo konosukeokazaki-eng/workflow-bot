@@ -2,7 +2,7 @@
 // Main.gs - 定数 + doPost + doGet + ルーティング
 // ============================================================
 
-var VERSION = '1.5.28';
+var VERSION = '1.5.29';
 
 var SHEET_SETTINGS   = '_設定';
 var SHEET_FIELDS     = '_項目設定';
@@ -109,6 +109,7 @@ function onRemovedFromSpace(event) { Logger.log('onRemovedFromSpace'); return {}
 function doGet(e) {
   if (e.parameter.ping === '1') return healthCheck_();
   if (e.parameter.action) return handleApproval_(e);
+  if (e.parameter.doc === 'manual') return renderManualPage_();
   var user = Session.getActiveUser().getEmail();
   if (!isAdmin_(user)) {
     return HtmlService.createHtmlOutput('<html><body style="font-family:sans-serif;text-align:center;padding:60px 20px;background:#f5f5f5"><div style="background:#fff;border-radius:12px;padding:40px;max-width:400px;margin:0 auto"><p style="font-size:48px">🔒</p><p style="font-size:18px;font-weight:bold;margin:16px 0">アクセス権限がありません</p><p style="color:#666">' + user + '</p><p style="color:#999;font-size:12px;margin-top:24px">問い合わせ: ' + CONTACT_EMAIL + '</p></div></body></html>').setTitle('アクセス拒否');
