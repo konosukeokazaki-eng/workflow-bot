@@ -122,3 +122,184 @@ function _writeDebugReport_(email, realRole, summary, perRole) {
   sh.setFrozenRows(1);
   try { sh.autoResizeColumns(1, 13); } catch (e) {}
 }
+
+// ============================================================
+// runEnvironmentDiagnostics() - 認証/データ/Chat/整合性の環境バグ検出
+// 読み取り系のみ。実書き込みは行わない(セル書換えテストもロールバックする)。
+// Apps Script エディタから実オーナーが手動で実行する。
+// ============================================================
+function runEnvironmentDiagnostics() {
+  var email = '';
+  try { email = Session.getActiveUser().getEmail(); } catch (e) {}
+  if (!email) throw new Error('実行者メールが取得できません');
+  var realRole = getUserRole_(email);
+  if (realRole !== ROLE_OWNER) throw new Error('このデバッグ関数は実オーナーのみ実行可能です(現在: ' + realRole + ')');
+
+  var results = [];
+  var add = function(category, name, ok, detail, fix) {
+    results.push({ category: category, name: name, ok: !!ok, detail: detail || '', fix: fix || '' });
+  };
+
+  // ---------- 認証系 ----------
+  add('認証', 'Session.getActiveUser().getEmail() が取れる', !!email, email,
+    '取れない場合: Chat 経由では空になることがある。commonEventObject.user.email の併用を検討。');
+
+  var oauthOk = false, oauthDetail = '';
+  try { var t = ScriptApp.getOAuthToken(); oauthOk = !!t; oauthDetail = 'len=' + (t ? t.length : 0); }
+  catch (e) { oauthDetail = e.message; }
+  add('認証', 'ScriptApp.getOAuthToken() 取得', oauthOk, oauthDetail, '取れない場合: スコープ再承認が必要。');
+
+  var saOk = false, saDetail = '';
+  try { getServiceAccountToken_(); saOk = true; saDetail = 'ok'; }
+  catch (e) { saDetail = e.message; }
+  add('認証', 'サービスアカウントトークン', saOk, saDetail,
+    'NG の場合: ScriptProperty SERVICE_ACCOUNT_KEY を確認。鍵が失効/ローテされた可能性。');
+
+  var dwdOk = false, dwdDetail = '';
+  try {
+    var it = getImpersonatedToken_(email, 'https://www.googleapis.com/auth/chat.spaces.readonly');
+    dwdOk = !!it; dwdDetail = 'impersonate=' + email + ' ok';
+  } catch (e) { dwdDetail = e.message; }
+  add('認証', 'DWD impersonation (chat.spaces.readonly)', dwdOk, dwdDetail,
+    'NG の場合: Workspace 管理コンソールで SA クライアント ID に該当スコープを委任。これが NG だと「デプロイ者のスペースだけ表示」バグが出る。');
+
+  // 本当にユーザー自身の見えるスペース一覧が取れるか(= デプロイ者スペースだけバグの検出)
+  var spacesOk = false, spacesDetail = '';
+  try {
+    var it2 = getImpersonatedToken_(email, 'https://www.googleapis.com/auth/chat.spaces.readonly');
+    var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/spaces?pageSize=1', {
+      method: 'get', headers: { 'Authorization': 'Bearer ' + it2 }, muteHttpExceptions: true
+    });
+    var code = resp.getResponseCode();
+    spacesOk = (code === 200);
+    spacesDetail = 'HTTP ' + code + ' ' + resp.getContentText().substring(0, 150);
+  } catch (e) { spacesDetail = e.message; }
+  add('認証', 'spaces.list (impersonated)', spacesOk, spacesDetail,
+    'NG だと UI の「スペース選択」が実行者本人の見えるスペースを引けず、代替で deployer のスペースを拾う挙動になる。');
+
+  // ---------- データ系 ----------
+  var ssOk = false, ssDetail = '';
+  var ss = null;
+  try { ss = SpreadsheetApp.openById(SPREADSHEET_ID); ssOk = true; ssDetail = ss.getName(); }
+  catch (e) { ssDetail = e.message; }
+  add('データ', 'スプレッドシートを開ける', ssOk, ssDetail,
+    'NG: ScriptProperty SPREADSHEET_ID / 権限設定を確認。');
+
+  if (ss) {
+    [SHEET_SETTINGS, SHEET_FIELDS, SHEET_BUTTONS, SHEET_ADMINS, SHEET_AUDIT, SHEET_TOKENS].forEach(function(n) {
+      var sh = ss.getSheetByName(n);
+      add('データ', 'シート存在: ' + n, !!sh, sh ? ('rows=' + sh.getLastRow()) : 'なし',
+        !sh ? '初回アクセス時に自動生成される。手動で /admin を開くか ensure*Schema_ を実行。' : '');
+    });
+
+    // setValue readback: 「ステータスが変わらない」バグ検出
+    var tmp = ss.getSheetByName('_診断一時') || ss.insertSheet('_診断一時');
+    var writeOk = false, writeDetail = '';
+    try {
+      var marker = 'diag_' + Date.now();
+      tmp.getRange('A1').setValue(marker);
+      SpreadsheetApp.flush();
+      var readBack = tmp.getRange('A1').getValue();
+      writeOk = (readBack === marker);
+      writeDetail = 'wrote=' + marker + ' read=' + readBack;
+      tmp.getRange('A1').clearContent();
+    } catch (e) { writeDetail = e.message; }
+    add('データ', 'setValue → flush → 読み戻し一致', writeOk, writeDetail,
+      'NG: 書き込みが反映されない根深いバグ。SpreadsheetApp.flush() 位置、権限、同時編集ロックを確認。');
+    try { ss.deleteSheet(tmp); } catch (e) {}
+  }
+
+  // LockService 取得可否
+  var lockOk = false, lockDetail = '';
+  try {
+    var lk = LockService.getScriptLock();
+    lk.tryLock(100);
+    if (lk.hasLock()) { lockOk = true; lockDetail = 'acquired'; lk.releaseLock(); }
+    else lockDetail = 'tryLock timeout (他プロセスが保持中かも)';
+  } catch (e) { lockDetail = e.message; }
+  add('データ', 'LockService 取得', lockOk, lockDetail,
+    'NG: 保存処理が待たされ「処理中」が長引く原因。');
+
+  // ---------- Chat 連携 ----------
+  add('Chat', 'FUNCTION_URL 設定', !!FUNCTION_URL, FUNCTION_URL || '(未設定)',
+    '未設定だと HTTP モードでカードボタンが機能しない。');
+  add('Chat', 'CONTACT_EMAIL 設定', !!CONTACT_EMAIL, CONTACT_EMAIL || '(未設定)', '');
+  add('Chat', 'CHAT_CONNECTION_MODE', CHAT_CONNECTION_MODE === 'http' || CHAT_CONNECTION_MODE === 'apps_script',
+    CHAT_CONNECTION_MODE, 'http か apps_script のみ有効。');
+
+  // ---------- 整合性 ----------
+  if (ss) {
+    var allWfs = (function() { try { return getAllWorkflowsForRender_() || []; } catch (e) { return []; } })();
+    // 承認型なのに承認者が空
+    var noApprover = allWfs.filter(function(w) { return w.type === '申請・承認' && !(w.approvers && String(w.approvers).trim()); });
+    add('整合性', '承認型WFの承認者未設定', noApprover.length === 0,
+      noApprover.length === 0 ? '0件' : noApprover.map(function(w){return '#'+w.id+' '+w.name;}).join(', '),
+      '承認者が空だと承認カードを誰にも送れない。');
+
+    // ボタンの linkedWorkflowId が壊れていないか
+    var brokenLinks = [];
+    allWfs.forEach(function(w) {
+      try {
+        var btns = getWorkflowButtons_(w.id);
+        btns.forEach(function(b) {
+          if (b.type === 'launch' && b.linkedWorkflowId) {
+            var child = getWorkflowById_(b.linkedWorkflowId);
+            if (!child) brokenLinks.push('WF#' + w.id + ' btn=' + b.name + ' → #' + b.linkedWorkflowId + ' が存在しない');
+          }
+        });
+      } catch (e) {}
+    });
+    add('整合性', '起動ボタンのlinkedWorkflowIdが有効', brokenLinks.length === 0,
+      brokenLinks.length === 0 ? '0件' : brokenLinks.join(' / '),
+      '子WFが削除/アーカイブされると親の起動ボタンが機能しなくなる。該当ボタンを削除するか子WFを復元。');
+
+    // 管理者シートに owner が1人も居ない
+    var adSh = ss.getSheetByName(SHEET_ADMINS);
+    var ownerExists = false;
+    if (adSh && adSh.getLastRow() >= 2) {
+      var rows = adSh.getRange(2, 1, adSh.getLastRow() - 1, Math.max(adSh.getLastColumn(), 3)).getValues();
+      ownerExists = rows.some(function(r) {
+        var role = String(r[2] || '').trim().toLowerCase();
+        return r[0] && (role === ROLE_OWNER || role === '');
+      });
+    }
+    add('整合性', 'owner が最低1人存在', ownerExists, ownerExists ? 'ok' : 'owner不在',
+      'NG: /admin へ誰もアクセスできなくなる。SHEET_ADMINS に手動で owner を追加。');
+
+    // 外部シート参照の到達性(到達不能なら警告のみ)
+    var extNG = [];
+    allWfs.forEach(function(w) {
+      if (!w.externalSheet) return;
+      var m = String(w.externalSheet).match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (!m) { extNG.push('WF#' + w.id + ' URL形式不正'); return; }
+      try { SpreadsheetApp.openById(m[1]); }
+      catch (e) { extNG.push('WF#' + w.id + ' ' + e.message.substring(0, 60)); }
+    });
+    add('整合性', '外部スプレッドシートに全てアクセス可', extNG.length === 0,
+      extNG.length === 0 ? '0件' : extNG.join(' / '),
+      '外部シートに書き込めない WF がある。共有設定を見直すか externalSheet を外す。');
+  }
+
+  _writeEnvDiagReport_(email, results);
+  var ng = results.filter(function(r){return !r.ok;}).length;
+  Logger.log('✅ 環境診断完了。NG=' + ng + ' / 全' + results.length + '件。「_環境診断レポート」シートを確認してください。');
+  return { ok: ng === 0, total: results.length, ng: ng, results: results };
+}
+
+function _writeEnvDiagReport_(email, results) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sh = ss.getSheetByName('_環境診断レポート');
+  if (!sh) sh = ss.insertSheet('_環境診断レポート');
+  sh.clear();
+  sh.appendRow(['=== 環境診断レポート ===']);
+  sh.appendRow(['生成日時', new Date()]);
+  sh.appendRow(['実行者', email]);
+  sh.appendRow(['バージョン', VERSION]);
+  sh.appendRow(['']);
+  sh.appendRow(['カテゴリ', '項目', '結果', '詳細', '対処ヒント']);
+  results.forEach(function(r) {
+    sh.appendRow([r.category, r.name, r.ok ? '✅ OK' : '❌ NG', r.detail, r.fix]);
+  });
+  sh.setFrozenRows(6);
+  try { sh.autoResizeColumns(1, 5); } catch (e) {}
+}
