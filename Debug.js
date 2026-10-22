@@ -184,7 +184,8 @@ function runEnvironmentDiagnostics() {
     'NG: ScriptProperty SPREADSHEET_ID / 権限設定を確認。');
 
   if (ss) {
-    [SHEET_SETTINGS, SHEET_FIELDS, SHEET_BUTTONS, SHEET_ADMINS, SHEET_AUDIT, SHEET_TOKENS].forEach(function(n) {
+    // SHEET_TOKENS は未使用(予約済み)なので必須シートから除外
+    [SHEET_SETTINGS, SHEET_FIELDS, SHEET_BUTTONS, SHEET_ADMINS, SHEET_AUDIT].forEach(function(n) {
       var sh = ss.getSheetByName(n);
       add('データ', 'シート存在: ' + n, !!sh, sh ? ('rows=' + sh.getLastRow()) : 'なし',
         !sh ? '初回アクセス時に自動生成される。手動で /admin を開くか ensure*Schema_ を実行。' : '');
@@ -466,7 +467,7 @@ function runButtonBehaviorDiagnostics() {
   _writeButtonDiagReport_(email, results, null);
   var ng = results.filter(function(r){return !r.ok;}).length;
   Logger.log('✅ ボタン挙動診断完了。NG=' + ng + ' / 全' + results.length + '件。「_ボタン挙動レポート」シート参照。');
-  return { ok: ng === 0, total: results.length, ng: ng };
+  return { ok: ng === 0, total: results.length, ng: ng, results: results };
 }
 
 function _writeButtonDiagReport_(email, results, note) {
@@ -571,14 +572,10 @@ function _collectNgItems_(data) {
   if (data.env && data.env.results) {
     data.env.results.forEach(function(r) { if (!r.ok) ng.push({ suite: 'env', category: r.category, name: r.name, detail: r.detail, fix: r.fix }); });
   }
-  if (data.button && data.button.results !== undefined) {
-    // button suite の results は返り値には含まれないので、改めて実行する代わりに skip
-    // (reportText 内に全情報が入る)
-  }
-  // button/role 診断の NG 情報は reportText から正規表現で拾う方が確実
-  if (data.button && !data.button.ok) ng.push({ suite: 'button', category: 'summary', name: 'button suite NG', detail: 'ng=' + data.button.ng + '/' + data.button.total, fix: 'reportText 参照' });
-  if (data.role && data.role.roles) {
-    // role suite は現状 ok 判定を返さないので reportText 参照
+  if (data.button && data.button.results) {
+    data.button.results.forEach(function(r) {
+      if (!r.ok) ng.push({ suite: 'button', category: 'WF#' + r.wfId + ' ' + r.wfName, name: r.scenario, detail: r.detail, fix: r.fix });
+    });
   }
   return ng;
 }
@@ -624,20 +621,10 @@ function _formatDiagReportText_(data, errs) {
   // --- Button ---
   if (data.button) {
     lines.push('## ボタン挙動診断  NG=' + data.button.ng + '/' + data.button.total);
-    // button suite は results をスプレッドシートに書くだけで返り値に含めていない
-    // → 別途取得
-    try {
-      var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-      var sh = ss.getSheetByName('_ボタン挙動レポート');
-      if (sh && sh.getLastRow() > 6) {
-        var rows = sh.getRange(7, 1, sh.getLastRow() - 6, 6).getValues();
-        rows.forEach(function(r) {
-          lines.push('  ' + (String(r[3]).indexOf('OK') >= 0 ? '✅' : '❌') +
-            ' WF#' + r[0] + ' "' + r[1] + '" [' + r[2] + '] — ' + (r[4] || ''));
-          if (String(r[3]).indexOf('NG') >= 0 && r[5]) lines.push('     ↳ 対処: ' + r[5]);
-        });
-      }
-    } catch (e) { lines.push('  (詳細取得失敗: ' + e.message + ')'); }
+    (data.button.results || []).forEach(function(r) {
+      lines.push('  ' + (r.ok ? '✅' : '❌') + ' WF#' + r.wfId + ' "' + r.wfName + '" [' + r.scenario + '] — ' + (r.detail || ''));
+      if (!r.ok && r.fix) lines.push('     ↳ 対処: ' + r.fix);
+    });
     lines.push('');
   } else if (errs.button) {
     lines.push('## ボタン挙動診断: ERROR ' + errs.button);
