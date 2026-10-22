@@ -193,13 +193,35 @@ function handleSubmitWorkflow_(event) {
     }
     // 手動で列が消された場合の防衛: 必須システム列(ステータス/メッセージ名など)を自動復旧
     try { ensureDataSheetSchema_(dataSheet, wf.type === '申請・承認'); } catch (e) { Logger.log('ensureDataSheetSchema_ skip: ' + e.message); }
+    // フィールド列欠落の自己修復: ヘッダに存在しないフィールド列をメッセージ名の直前に補完する。
+    // レガシーデータ(過去バージョンで列が同期されなかった WF)で silent write-fail を防ぐ。
+    try {
+      var _hdr = dataSheet.getRange(1, 1, 1, dataSheet.getLastColumn()).getValues()[0];
+      var _repaired = false;
+      fields.forEach(function(f) {
+        if (_hdr.indexOf(f.name) === -1) {
+          var _before = _hdr.indexOf('ステータス');
+          if (_before < 0) _before = _hdr.indexOf('メッセージ名');
+          var _at;
+          if (_before >= 0) { dataSheet.insertColumnBefore(_before + 1); _at = _before + 1; }
+          else { _at = dataSheet.getLastColumn() + 1; }
+          dataSheet.getRange(1, _at).setValue(f.name);
+          _hdr = dataSheet.getRange(1, 1, 1, dataSheet.getLastColumn()).getValues()[0];
+          _repaired = true;
+          Logger.log('self-heal: inserted field col "' + f.name + '" at ' + _at + ' for wf=' + wf.id);
+        }
+      });
+      if (_repaired) writeAuditLog_('schema.selfheal', 'wid=' + wf.id, 'fields=' + fields.length);
+    } catch (e) { Logger.log('field self-heal skip: ' + e.message); }
     var lastCol = dataSheet.getLastColumn();
     var headerRow = dataSheet.getRange(1, 1, 1, lastCol).getValues()[0];
     var row = new Array(lastCol);
     for (var ci = 0; ci < lastCol; ci++) row[ci] = '';
     row[0] = new Date(); row[1] = senderName; row[2] = senderEmail;
+    // dataCol を信じずヘッダ名で列を特定する(自己修復直後は dataCol が古いため)
     fields.forEach(function(f) {
-      var col = f.dataCol && f.dataCol > 0 ? f.dataCol : -1;
+      var col = headerRow.indexOf(f.name) + 1;
+      if (col <= 0) { col = f.dataCol && f.dataCol > 0 ? f.dataCol : -1; }
       if (col > 0 && col <= lastCol) row[col - 1] = values[f.name];
     });
     var statusIdx = -1, msgIdx = -1;
