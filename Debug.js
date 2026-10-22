@@ -67,7 +67,7 @@ function _writeDebugReport_(email, realRole, summary, perRole) {
   sh.appendRow(['実行者', email]);
   sh.appendRow(['実権限', realRole]);
   sh.appendRow(['バージョン', VERSION]);
-  sh.appendRow([]);
+  sh.appendRow(['']);
 
   sh.appendRow(['--- サマリ ---']);
   sh.appendRow(['ロール', '可視WF数', '編集可', '削除可', '管理データ閲覧', '管理者編集', 'アーカイブ可', 'ON/OFF切替可']);
@@ -82,7 +82,7 @@ function _writeDebugReport_(email, realRole, summary, perRole) {
     ]);
   });
 
-  sh.appendRow([]);
+  sh.appendRow(['']);
   sh.appendRow(['--- WF別 可視/編集/削除マトリクス ---']);
   sh.appendRow(['WF ID', 'WF名', '作成者', '共同編集者',
                 'owner可視', 'editor可視', 'member可視',
@@ -105,7 +105,7 @@ function _writeDebugReport_(email, realRole, summary, perRole) {
     ]);
   });
 
-  sh.appendRow([]);
+  sh.appendRow(['']);
   sh.appendRow(['--- 期待される挙動との差分チェック ---']);
   sh.appendRow(['項目', '結果', '備考']);
   var ownerSum = summary[0], editorSum = summary[1], memberSum = summary[2];
