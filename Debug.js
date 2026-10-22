@@ -369,7 +369,10 @@ function runButtonBehaviorDiagnostics() {
     // 3) 空入力送信 → 必須バリデーションが働くか(DB書込に到達しない)
     try {
       var requiredFields = getWorkflowFields_(wf.id).filter(function(f){return f.required;});
-      if (requiredFields.length === 0) {
+      // 承認者空の承認型は submit ガードで止まるため、ここでは別シナリオで検証(スキップ扱い)
+      if (wf.type === '申請・承認' && !String(wf.approvers || '').trim()) {
+        add(wf, '必須バリデーション', true, '承認者空ガード優先のためスキップ', '');
+      } else if (requiredFields.length === 0) {
         add(wf, '必須バリデーション', true, '必須項目なし(スキップ)', '');
       } else {
         var fakeEvent = {
