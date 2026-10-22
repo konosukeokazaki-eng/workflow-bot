@@ -207,7 +207,7 @@ function renderButtons(){
     var sub;
     if(b.type==='launch'){
       var tgt=(workflows||[]).filter(function(w){return w.id===Number(b.linkedWorkflowId);})[0];
-      sub='<span class="mi" style="font-size:14px;vertical-align:middle">hub</span> 「'+esc(tgt?tgt.name:'(未設定)')+'」を起動 ・'+(b.inheritThread?'同じスレッドに続ける':'新規メッセージとして投稿');
+      sub='<span class="mi" style="font-size:14px;vertical-align:middle">hub</span> 「'+esc(tgt?tgt.name:'(未設定)')+'」を起動 ・'+(b.inheritThread?'同じスレッドに続ける':'新規メッセージとして投稿')+(b.status?' ・連動後に親→「'+esc(b.status)+'」':'');
     }else{
       sub='→ 「'+esc(b.status)+'」'+(b.threadReply?' ・<span class="mi" style="font-size:14px">reply</span> 返信':'');
     }
@@ -321,7 +321,8 @@ function showButtonModal(idx){
       +'<label class="radio-card"><input type="radio" name="bInheritMode" value="thread"'+(b.inheritThread?' checked':'')+'><div class="radio-card-body"><div class="radio-card-title">同じスレッドに続けて投稿する</div><div class="radio-card-desc">このボタンが押された承認カードの返信として投稿されます。<br>例：「購入申請」承認 → 同じスレッドで「発注依頼」のカードが続く</div></div></label>'
       +'<label class="radio-card"><input type="radio" name="bInheritMode" value="new"'+(!b.inheritThread?' checked':'')+'><div class="radio-card-body"><div class="radio-card-title">別のメッセージとして投稿する</div><div class="radio-card-desc">起動したワークフロー自身の送信先スペースに新規メッセージとして投稿されます。<br>例：承認を機に別部署スペースへ独立した依頼を飛ばす</div></div></label>'
       +'</div>'
-      +'<div class="help-note" style="font-size:11px;margin-top:8px">このボタンを押しても親ワークフローのステータスは変わりません（ステータス更新したい場合は別途「ステータスを設定」ボタンを並べて配置してください）。連鎖は最大3階層までです。</div>'
+      +'<div class="form-group"><label>連動後に親に設定するステータス値 <span style="color:var(--c-text-faint);font-size:11px;font-weight:normal">(任意)</span></label><input type="text" id="bLaunchStatus" value="'+esc(b.status||'')+'" placeholder="例: 発注済み / 次工程へ"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">連動先ワークフローが<b>実際に送信された時点</b>で、親の承認カードのステータスがこの値に更新されます。空欄なら更新しません。</div></div>'
+      +'<div class="help-note" style="font-size:11px;margin-top:8px">連鎖は最大3階層までです。</div>'
     +'</div>'
     +'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveButton('+idx+')">保存</button></div>'
     +'</div>';
@@ -350,7 +351,8 @@ function saveButton(idx){
     if(!lid){showError('errBLinked');ok=false;}else hideError('errBLinked');
     var modeEl=document.querySelector('input[name=bInheritMode]:checked');
     b.linkedWorkflowId=Number(lid||0);b.inheritThread=modeEl?modeEl.value==='thread':false;
-    b.status='';b.threadReply=false;b.replyMsg='';
+    var ls=document.getElementById('bLaunchStatus');b.status=ls?ls.value.trim():'';
+    b.threadReply=false;b.replyMsg='';
   }
   if(!ok)return;
   if(idx>=0)currentButtons[idx]=b;else currentButtons.push(b);
@@ -677,7 +679,7 @@ function showHelp(){
     +'<li>連動ワークフロー:起動したい別ワークフローを選択(現在編集中のワークフローは除外されます)。先に連動先のワークフローを作成してから選んでください。</li>'
     +'<li>スレッド継承:ONにすると起動したワークフローのカードは<b>親ワークフローの承認カードのスレッド内</b>に投稿されます。OFFだと連動先ワークフロー自身の送信先スペースに新規メッセージとして投稿されます。</li>'
     +'<li>連鎖は最大3階層までに制限されます(無限ループ防止)。</li>'
-    +'<li>連動ボタンはステータス更新を行いません。ステータスを変えたい場合は通常ボタンと組み合わせてください。</li>'
+    +'<li><b>連動後に親に設定するステータス値</b>(任意):連動先ワークフローが実際に送信された時点で、親承認カードのステータスがこの値に更新されます。空欄なら更新しません。連動ボタンを押しただけでは更新されず、連動先が実行されて初めて反映される点に注意してください。</li>'
     +'</ul></li>'
     +'</ul>'
     +'<li><b>外部スプレッドシート連携</b>:別のスプレッドシートにも同時に書き込みたい場合、URL を入力してください。</li>'
@@ -859,7 +861,7 @@ function showHelp(){
     +'<ol>'
     +'<li>連動先ワークフローが「有効」になっているか(無効化されたワークフローは起動対象になりません)。</li>'
     +'<li>連動が3階層を超えていないか(「連鎖上限(3階層)を超えています」と表示されます)。</li>'
-    +'<li>連動ボタン自身は押しても親ワークフローのステータスは変わりません。ステータス更新が必要な場合は通常ボタンと併用してください。</li>'
+    +'<li>連動ボタンに「連動後に親に設定するステータス値」を指定している場合、連動先の送信が完了して初めて親のステータスが更新されます(ボタンを押しただけでは更新されません)。空欄なら更新されません。</li>'
     +'</ol>'
 
     +'<h5>Q. スレッド継承ONなのに連動ワークフローが新規メッセージとして投稿される</h5>'

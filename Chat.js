@@ -30,25 +30,29 @@ function openWorkflowDialog_(event) {
   if (!wid) return createMessage_('ワークフローが選択されていません。');
   var chain = parseInt(params.chain || '1', 10);
   var inheritFrom = params.inheritThreadFrom || '';
-  // 連動ボタンから直接呼ばれる場合は親WF/行指定で親メッセージ名を解決する
-  if (!inheritFrom && params.parentWorkflowId && params.parentRow) {
+  var inheritThread = String(params.inheritThread || '') === '1';
+  var parentWorkflowId = params.parentWorkflowId || '';
+  var parentRow = params.parentRow || '';
+  var parentStatus = params.parentStatus || '';
+  // 連動ボタンから直接呼ばれる場合、スレッド継承ONなら親メッセージ名を解決して inheritFrom に積む
+  if (!inheritFrom && inheritThread && parentWorkflowId && parentRow) {
     try {
-      var pwf = getWorkflowById_(parseInt(params.parentWorkflowId, 10));
+      var pwf = getWorkflowById_(parseInt(parentWorkflowId, 10));
       if (pwf) {
         var pss = SpreadsheetApp.openById(SPREADSHEET_ID);
         var pds = pss.getSheetByName(pwf.name);
         if (pds) {
           var phdrs = pds.getRange(1, 1, 1, pds.getLastColumn()).getValues()[0];
           for (var pi = 0; pi < phdrs.length; pi++) {
-            if (phdrs[pi] === 'メッセージ名') { inheritFrom = pds.getRange(parseInt(params.parentRow, 10), pi + 1).getValue() || ''; break; }
+            if (phdrs[pi] === 'メッセージ名') { inheritFrom = pds.getRange(parseInt(parentRow, 10), pi + 1).getValue() || ''; break; }
           }
         }
       }
     } catch (e) { Logger.log('parent resolve skip: ' + e.message); }
   }
-  Logger.log('openWorkflowDialog params=' + JSON.stringify(params) + ' resolved inheritFrom=' + inheritFrom);
+  Logger.log('openWorkflowDialog params=' + JSON.stringify(params) + ' resolved inheritFrom=' + inheritFrom + ' parentStatus=' + parentStatus);
   if (chain > 3) return createMessage_('連鎖上限(3階層)を超えています。');
-  return buildWorkflowDialog_(parseInt(wid, 10), chain, inheritFrom);
+  return buildWorkflowDialogCard_(parseInt(wid, 10), null, null, 'push', chain, inheritFrom, { parentWorkflowId: parentWorkflowId, parentRow: parentRow, parentStatus: parentStatus });
 }
 
 function buildWorkflowDialog_(workflowId, chain, inheritFrom) {
@@ -58,7 +62,7 @@ function buildWorkflowDialog_(workflowId, chain, inheritFrom) {
 // 共通のカード生成。prefill(name -> string値) と errors(必須未入力の項目名配列) を渡すと
 // 入力値を保持したまま再描画し、エラー行を先頭に挿入する。
 // navMode: 'push'(初回) or 'update'(再描画)
-function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode, chain, inheritFrom) {
+function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode, chain, inheritFrom, parentInfo) {
   var wf = getWorkflowById_(workflowId);
   if (!wf) return createMessage_('ワークフローが見つかりません');
   var fields = getWorkflowFields_(workflowId);
@@ -105,6 +109,11 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode, chain, i
   var submitParams = [{ key: 'actionName', value: 'submitWorkflow' }, { key: 'workflowId', value: String(workflowId) }];
   if (chain) submitParams.push({ key: 'chain', value: String(chain) });
   if (inheritFrom) submitParams.push({ key: 'inheritThreadFrom', value: String(inheritFrom) });
+  if (parentInfo && parentInfo.parentWorkflowId && parentInfo.parentRow) {
+    submitParams.push({ key: 'parentWorkflowId', value: String(parentInfo.parentWorkflowId) });
+    submitParams.push({ key: 'parentRow', value: String(parentInfo.parentRow) });
+    if (parentInfo.parentStatus) submitParams.push({ key: 'parentStatus', value: String(parentInfo.parentStatus) });
+  }
   widgets.push({ buttonList: { buttons: [{ text: '送信', onClick: { action: { function: cardActionFunc_(), parameters: submitParams } } }] } });
   var icon = (wf.type === '申請・承認') ? '📋' : '📝';
   var _hdr = { title: icon + ' ' + wf.name };
@@ -120,6 +129,10 @@ function handleSubmitWorkflow_(event) {
   var workflowId = parseInt(params.workflowId || '0', 10);
   var chain = parseInt(params.chain || '1', 10);
   var inheritFrom = String(params.inheritThreadFrom || '');
+  var parentWorkflowId = parseInt(params.parentWorkflowId || '0', 10);
+  var parentRow = parseInt(params.parentRow || '0', 10);
+  var parentStatus = String(params.parentStatus || '');
+  var parentInfo = parentWorkflowId && parentRow ? { parentWorkflowId: parentWorkflowId, parentRow: parentRow, parentStatus: parentStatus } : null;
   var wf = getWorkflowById_(workflowId);
   if (!wf) return createMessage_('ワークフローが見つかりません。');
   var fields = getWorkflowFields_(workflowId);
@@ -155,7 +168,7 @@ function handleSubmitWorkflow_(event) {
     values[f.name] = v;
     if (f.required && !String(v).trim()) errors.push(f.name);
   });
-  if (errors.length > 0) return buildWorkflowDialogCard_(workflowId, values, errors, 'update', chain, inheritFrom);
+  if (errors.length > 0) return buildWorkflowDialogCard_(workflowId, values, errors, 'update', chain, inheritFrom, parentInfo);
   // 並行申請時の rowIndex 取り違え防止のため、appendRow→getLastRow→承認カード送信までを直列化する。
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) return createMessage_('現在混み合っています。もう一度送信してください。');
@@ -195,6 +208,11 @@ function handleSubmitWorkflow_(event) {
     var destSpace = wf.targetSpace || currentSpace;
     if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, chain, inheritFrom);
     else sendInfoCard_(wf, fields, values, senderName, destSpace, inheritFrom);
+    // 連動元(親)ワークフローのステータスを更新する。親カードもあわせて再描画する。
+    if (parentInfo && parentInfo.parentStatus) {
+      try { updateParentStatus_(parentInfo.parentWorkflowId, parentInfo.parentRow, parentInfo.parentStatus); }
+      catch (e) { Logger.log('updateParentStatus_ 失敗: ' + e.message); }
+    }
     return { action: { navigations: [{ endNavigation: { action: 'CLOSE_DIALOG' } }], notification: { text: '✅ 送信しました（' + wf.name + '）' } } };
   } finally {
     try { lock.releaseLock(); } catch (e) {}
@@ -216,12 +234,12 @@ function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, 
       var lp = [
         { key: 'actionName', value: 'openWorkflow' },
         { key: 'workflowId', value: String(b.linkedWorkflowId) },
-        { key: 'chain', value: String(chainVal + 1) }
+        { key: 'chain', value: String(chainVal + 1) },
+        { key: 'parentWorkflowId', value: String(wf.id) },
+        { key: 'parentRow', value: String(rowIndex) }
       ];
-      if (b.inheritThread) {
-        lp.push({ key: 'parentWorkflowId', value: String(wf.id) });
-        lp.push({ key: 'parentRow', value: String(rowIndex) });
-      }
+      if (b.inheritThread) lp.push({ key: 'inheritThread', value: '1' });
+      if (b.status) lp.push({ key: 'parentStatus', value: String(b.status) });
       return { text: b.name, color: color, onClick: { action: { function: cardActionFunc_(), parameters: lp, interaction: 'OPEN_DIALOG' } } };
     }
     return { text: b.name, color: color, onClick: { openLink: { url: FUNCTION_URL + '?action=btn&row=' + rowIndex + '&wf=' + wf.id + '&btn=' + idx + '&name=' + encodeURIComponent(senderName) + '&token=' + secToken + '&chain=' + chainVal } } };
@@ -289,7 +307,7 @@ function sendInfoCard_(wf, fields, values, senderName, destSpace, inheritFrom) {
 // 連動ボタン: 親メッセージのスレッドに次ワークフローの起動カードを投稿する。
 // inheritThread=true のとき次のワークフロー送信先も親スレッドに継承させる (inheritThreadFrom を引き継ぐ)。
 // chain は投稿時点の階層カウント(次ワークフロー送信で chain+1 が記録される)。
-function postLauncherToThread_(linkedWf, parentMessageName, inheritThread, chain, applicantName) {
+function postLauncherToThread_(linkedWf, parentMessageName, inheritThread, chain, applicantName, parentWfId, parentRow, parentStatus) {
   try {
     if (!parentMessageName) throw new Error('親メッセージが特定できません');
     var parentSpace = String(parentMessageName).split('/messages/')[0];
@@ -297,6 +315,11 @@ function postLauncherToThread_(linkedWf, parentMessageName, inheritThread, chain
     var threadName = parentSpace + '/threads/' + parentMsgId;
     var params = [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(linkedWf.id) }, { key: 'chain', value: String(chain) }];
     if (inheritThread) params.push({ key: 'inheritThreadFrom', value: parentMessageName });
+    if (parentWfId && parentRow) {
+      params.push({ key: 'parentWorkflowId', value: String(parentWfId) });
+      params.push({ key: 'parentRow', value: String(parentRow) });
+      if (parentStatus) params.push({ key: 'parentStatus', value: String(parentStatus) });
+    }
     var card = {
       header: { title: '🚀 次のワークフロー', subtitle: linkedWf.name },
       sections: [{ widgets: [
@@ -338,7 +361,7 @@ function handleApproval_(e) {
       var msgColL = -1;
       for (var ci = 0; ci < headersL.length; ci++) if (headersL[ci] === 'メッセージ名') { msgColL = ci + 1; break; }
       var parentMsg = msgColL > 0 ? sheetL.getRange(rowIndex, msgColL).getValue() : '';
-      postLauncherToThread_(linkedWf, parentMsg, btn.inheritThread, incomingChain + 1, applicantName);
+      postLauncherToThread_(linkedWf, parentMsg, btn.inheritThread, incomingChain + 1, applicantName, wf.id, rowIndex, btn.status || '');
       writeAuditLog_('approval.launch', 'wid=' + workflowId + ' row=' + rowIndex, 'linked=' + btn.linkedWorkflowId);
       return htmlPage_('🚀', '起動しました', '次のワークフロー「' + linkedWf.name + '」をスレッドに投稿しました', '#1a73e8');
     }
@@ -417,6 +440,35 @@ function updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicant
       try { notifyAdminOnError_(new Error(errMsg), 'updateApprovalCard_'); } catch (e2) {}
     }
   } catch (err) { Logger.log('カード更新エラー: ' + err.message); try { notifyAdminOnError_(err, 'updateApprovalCard_'); } catch (e3) {} }
+}
+
+// 連動先ワークフローが実際に送信された際に、親WFのステータスを newStatus に更新する。
+// 既に別のステータスで確定済みの場合は上書きしない(通常ボタンでの承認/却下済み行を壊さないため)。
+function updateParentStatus_(parentWfId, parentRow, newStatus) {
+  var pwf = getWorkflowById_(parseInt(parentWfId, 10));
+  if (!pwf) return;
+  if (pwf.type !== '申請・承認') return;
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet = ss.getSheetByName(pwf.name);
+  if (!sheet) return;
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var statusCol = -1, msgCol = -1;
+  for (var c = 0; c < headers.length; c++) { if (headers[c] === 'ステータス') statusCol = c + 1; if (headers[c] === 'メッセージ名') msgCol = c + 1; }
+  if (statusCol === -1) return;
+  var cur = sheet.getRange(parentRow, statusCol).getValue();
+  if (cur && String(cur) !== '承認待ち') { Logger.log('updateParentStatus_ skip: already=' + cur); return; }
+  sheet.getRange(parentRow, statusCol).setValue(newStatus);
+  SpreadsheetApp.flush();
+  updateExternalSheet_(pwf, pwf.name, parentRow, statusCol, newStatus);
+  var messageName = msgCol > 0 ? sheet.getRange(parentRow, msgCol).getValue() : '';
+  if (messageName) {
+    var fields = getWorkflowFields_(parseInt(parentWfId, 10));
+    var senderCol = -1;
+    for (var ci = 0; ci < headers.length; ci++) { if (headers[ci] === '送信者') { senderCol = ci + 1; break; } }
+    var applicantName = senderCol > 0 ? String(sheet.getRange(parentRow, senderCol).getValue() || '') : '';
+    updateApprovalCard_(pwf, fields, sheet, parentRow, messageName, applicantName, newStatus, '🔄', headers);
+  }
+  writeAuditLog_('approval.chain_update', 'wid=' + parentWfId + ' row=' + parentRow, newStatus);
 }
 
 function sendThreadReply_(spaceId, messageName, msgTemplate, applicantName, newStatus) {

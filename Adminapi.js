@@ -478,7 +478,7 @@ function api_saveWorkflow(data) {
       }
       btSheet.appendRow([
         wid, b.name,
-        btype === 'launch' ? '' : (b.status || ''),
+        b.status || '',
         b.color || 'gray', idx2 + 1,
         btype === 'launch' ? false : !!b.threadReply,
         btype === 'launch' ? '' : (b.replyMsg || ''),
