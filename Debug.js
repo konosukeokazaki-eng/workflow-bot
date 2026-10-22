@@ -501,6 +501,168 @@ function runAllDiagnostics() {
   return out;
 }
 
+// ============================================================
+// HTTP 診断エンドポイント (doGet 経由)
+// Claude Code が WebFetch で呼び出すためのハンドラ。
+// ScriptProperty DIAG_SECRET と一致する key パラメータ必須。
+// 戻り値は JSON { ok, summary, ngItems, reportText, driveFileUrl }
+// 同時に Drive にテキストレポートを保存(ユーザーの要望: スプレッドシートではなくテキストで)。
+// ============================================================
+function handleDiagRequest_(e) {
+  var out = ContentService.createTextOutput().setMimeType(ContentService.MimeType.JSON);
+  var secret = PropertiesService.getScriptProperties().getProperty('DIAG_SECRET');
+  if (!secret) {
+    out.setContent(JSON.stringify({ ok: false, error: 'DIAG_SECRET 未設定(ScriptProperties)' }));
+    return out;
+  }
+  if (!e.parameter.key || e.parameter.key !== secret) {
+    out.setContent(JSON.stringify({ ok: false, error: 'invalid key' }));
+    return out;
+  }
+  var suite = String(e.parameter.diag || 'all');
+  var result = runDiagnosticsForWeb_(suite);
+  out.setContent(JSON.stringify(result));
+  return out;
+}
+
+function runDiagnosticsForWeb_(suite) {
+  var data = { role: null, env: null, button: null };
+  var errs = {};
+  if (suite === 'all' || suite === 'role') {
+    try { data.role = runRoleDebugSuite(); } catch (e) { errs.role = e.message; }
+  }
+  if (suite === 'all' || suite === 'env') {
+    try { data.env = runEnvironmentDiagnostics(); } catch (e) { errs.env = e.message; }
+  }
+  if (suite === 'all' || suite === 'button') {
+    try { data.button = runButtonBehaviorDiagnostics(); } catch (e) { errs.button = e.message; }
+  }
+  var text = _formatDiagReportText_(data, errs);
+  var driveFileUrl = _saveDiagReportToDrive_(text, suite);
+  var ngItems = _collectNgItems_(data);
+  return {
+    ok: ngItems.length === 0,
+    version: VERSION,
+    generatedAt: new Date().toISOString(),
+    suite: suite,
+    totalNg: ngItems.length,
+    ngItems: ngItems,
+    reportText: text,
+    driveFileUrl: driveFileUrl,
+    errors: errs
+  };
+}
+
+function _collectNgItems_(data) {
+  var ng = [];
+  if (data.env && data.env.results) {
+    data.env.results.forEach(function(r) { if (!r.ok) ng.push({ suite: 'env', category: r.category, name: r.name, detail: r.detail, fix: r.fix }); });
+  }
+  if (data.button && data.button.results !== undefined) {
+    // button suite の results は返り値には含まれないので、改めて実行する代わりに skip
+    // (reportText 内に全情報が入る)
+  }
+  // button/role 診断の NG 情報は reportText から正規表現で拾う方が確実
+  if (data.button && !data.button.ok) ng.push({ suite: 'button', category: 'summary', name: 'button suite NG', detail: 'ng=' + data.button.ng + '/' + data.button.total, fix: 'reportText 参照' });
+  if (data.role && data.role.roles) {
+    // role suite は現状 ok 判定を返さないので reportText 参照
+  }
+  return ng;
+}
+
+function _formatDiagReportText_(data, errs) {
+  var lines = [];
+  lines.push('================================================================');
+  lines.push('  workflow-bot 診断レポート');
+  lines.push('  生成日時: ' + new Date().toISOString());
+  lines.push('  バージョン: ' + VERSION);
+  lines.push('================================================================');
+  lines.push('');
+
+  // --- Role suite ---
+  if (data.role) {
+    lines.push('## ロール別シミュレーション');
+    (data.role.roles || []).forEach(function(r) {
+      lines.push('  [' + r.asRole + '] 可視=' + r.visible + ' 編集=' + r.editable + ' 削除=' + r.deletable +
+        ' 管理データ=' + (r.canSeeMasterSheet?'○':'×') +
+        ' 管理者編集=' + (r.canManageAdmins?'○':'×') +
+        ' アーカイブ=' + (r.canArchive?'○':'×') +
+        ' ON/OFF=' + (r.canToggleStatus?'○':'×'));
+    });
+    lines.push('');
+  } else if (errs.role) {
+    lines.push('## ロール別シミュレーション: ERROR ' + errs.role);
+    lines.push('');
+  }
+
+  // --- Env ---
+  if (data.env) {
+    lines.push('## 環境診断  NG=' + data.env.ng + '/' + data.env.total);
+    (data.env.results || []).forEach(function(r) {
+      lines.push('  ' + (r.ok ? '✅' : '❌') + ' [' + r.category + '] ' + r.name + ' — ' + (r.detail || '').replace(/\n/g,' '));
+      if (!r.ok && r.fix) lines.push('     ↳ 対処: ' + r.fix);
+    });
+    lines.push('');
+  } else if (errs.env) {
+    lines.push('## 環境診断: ERROR ' + errs.env);
+    lines.push('');
+  }
+
+  // --- Button ---
+  if (data.button) {
+    lines.push('## ボタン挙動診断  NG=' + data.button.ng + '/' + data.button.total);
+    // button suite は results をスプレッドシートに書くだけで返り値に含めていない
+    // → 別途取得
+    try {
+      var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+      var sh = ss.getSheetByName('_ボタン挙動レポート');
+      if (sh && sh.getLastRow() > 6) {
+        var rows = sh.getRange(7, 1, sh.getLastRow() - 6, 6).getValues();
+        rows.forEach(function(r) {
+          lines.push('  ' + (String(r[3]).indexOf('OK') >= 0 ? '✅' : '❌') +
+            ' WF#' + r[0] + ' "' + r[1] + '" [' + r[2] + '] — ' + (r[4] || ''));
+          if (String(r[3]).indexOf('NG') >= 0 && r[5]) lines.push('     ↳ 対処: ' + r[5]);
+        });
+      }
+    } catch (e) { lines.push('  (詳細取得失敗: ' + e.message + ')'); }
+    lines.push('');
+  } else if (errs.button) {
+    lines.push('## ボタン挙動診断: ERROR ' + errs.button);
+    lines.push('');
+  }
+
+  lines.push('================================================================');
+  lines.push('end of report');
+  return lines.join('\n');
+}
+
+function _saveDiagReportToDrive_(text, suite) {
+  try {
+    var folderName = 'workflow-bot 診断レポート';
+    var folders = DriveApp.getFoldersByName(folderName);
+    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+    var ts = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
+    var name = 'diag_' + suite + '_' + ts + '.txt';
+    var file = folder.createFile(name, text, 'text/plain');
+    // 最新だけ残して古いレポートを掃除(直近 20 件保持)
+    _rotateDiagReports_(folder, 20);
+    return file.getUrl();
+  } catch (e) {
+    Logger.log('_saveDiagReportToDrive_ エラー: ' + e.message);
+    return '';
+  }
+}
+
+function _rotateDiagReports_(folder, keep) {
+  try {
+    var files = folder.getFiles();
+    var arr = [];
+    while (files.hasNext()) { var f = files.next(); arr.push({ f: f, t: f.getLastUpdated().getTime() }); }
+    arr.sort(function(a,b){return b.t - a.t;});
+    for (var i = keep; i < arr.length; i++) { arr[i].f.setTrashed(true); }
+  } catch (e) {}
+}
+
 function _writeEnvDiagReport_(email, results) {
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   var sh = ss.getSheetByName('_環境診断レポート');

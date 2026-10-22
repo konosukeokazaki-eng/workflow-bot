@@ -2,7 +2,7 @@
 // Main.gs - 定数 + doPost + doGet + ルーティング
 // ============================================================
 
-var VERSION = '1.5.38';
+var VERSION = '1.5.39';
 
 var SHEET_SETTINGS   = '_設定';
 var SHEET_FIELDS     = '_項目設定';
@@ -108,6 +108,7 @@ function onRemovedFromSpace(event) { Logger.log('onRemovedFromSpace'); return {}
 
 function doGet(e) {
   if (e.parameter.ping === '1') return healthCheck_();
+  if (e.parameter.diag) return handleDiagRequest_(e);
   if (e.parameter.action) return handleApproval_(e);
   if (e.parameter.doc === 'manual') return renderManualPage_();
   var user = Session.getActiveUser().getEmail();
