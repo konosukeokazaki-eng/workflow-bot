@@ -286,6 +286,221 @@ function runEnvironmentDiagnostics() {
   return { ok: ng === 0, total: results.length, ng: ng, results: results };
 }
 
+// ============================================================
+// runButtonBehaviorDiagnostics() - 各WFのボタン挙動を実データ非破壊で検証
+// - /apply コマンド投入時のカード生成
+// - openWorkflow ダイアログの生成(全フィールド含有)
+// - submitWorkflow に空入力 → 必須バリデーションが働くか(DB書込に到達する前の経路)
+// - 承認トークン発行→検証 ラウンドトリップ
+// - 無効トークンでの handleApproval_ がエラーページを返すか
+// - 起動ボタンの linkedWorkflowId からダイアログを生成できるか
+// 書き込み・Chat API 送信は一切行わない。
+// ============================================================
+function runButtonBehaviorDiagnostics() {
+  var email = '';
+  try { email = Session.getActiveUser().getEmail(); } catch (e) {}
+  if (!email) throw new Error('実行者メールが取得できません');
+  var realRole = getUserRole_(email);
+  if (realRole !== ROLE_OWNER) throw new Error('このデバッグ関数は実オーナーのみ実行可能です(現在: ' + realRole + ')');
+
+  var results = [];
+  var add = function(wf, scenario, ok, detail, fix) {
+    results.push({ wfId: wf ? wf.id : '', wfName: wf ? wf.name : '-', scenario: scenario, ok: !!ok, detail: detail || '', fix: fix || '' });
+  };
+
+  var wfs = getActiveWorkflows_();
+  if (wfs.length === 0) {
+    _writeButtonDiagReport_(email, results, '有効なWFがありません');
+    return { ok: true, total: 0 };
+  }
+
+  // --- 共通: 擬似イベント ---
+  var fakeSpace = 'spaces/__DIAG__';
+  var fakeUser = { displayName: '診断ユーザー', email: email };
+
+  wfs.forEach(function(wf) {
+    // 1) /apply ダイアログ生成
+    try {
+      var dlg = buildWorkflowDialog_(wf.id);
+      var hasCard = !!(dlg && dlg.action && dlg.action.navigations && dlg.action.navigations[0] &&
+                       (dlg.action.navigations[0].pushCard || dlg.action.navigations[0].updateCard));
+      var card = dlg && dlg.action && dlg.action.navigations && dlg.action.navigations[0] &&
+                 (dlg.action.navigations[0].pushCard || dlg.action.navigations[0].updateCard);
+      var widgets = card && card.sections && card.sections[0] && card.sections[0].widgets || [];
+      var hasSubmit = widgets.some(function(w) {
+        return w.buttonList && w.buttonList.buttons && w.buttonList.buttons.some(function(b) {
+          return b.onClick && b.onClick.action && b.onClick.action.parameters &&
+                 b.onClick.action.parameters.some(function(p){ return p.key==='actionName' && p.value==='submitWorkflow'; });
+        });
+      });
+      add(wf, 'ダイアログ生成', hasCard && hasSubmit,
+        'widgets=' + widgets.length + ' submit=' + hasSubmit,
+        !hasCard ? 'buildWorkflowDialog_ がカードを返していない' : (!hasSubmit ? '送信ボタンが欠落' : ''));
+    } catch (e) {
+      add(wf, 'ダイアログ生成', false, 'throw: ' + e.message, 'buildWorkflowDialog_ が例外');
+    }
+
+    // 2) フィールドがダイアログに全て含まれているか
+    try {
+      var fields = getWorkflowFields_(wf.id);
+      var dlg2 = buildWorkflowDialog_(wf.id);
+      var card2 = dlg2.action.navigations[0].pushCard || dlg2.action.navigations[0].updateCard;
+      var widgets2 = card2.sections[0].widgets;
+      var missing = [];
+      fields.forEach(function(f) {
+        if (f.type === 'checkbox_qty') {
+          var found = widgets2.some(function(w) { return w.textParagraph && String(w.textParagraph.text || '').indexOf(f.name) !== -1; });
+          if (!found) missing.push(f.name);
+        } else {
+          var key = 'field_' + f.order;
+          var found2 = widgets2.some(function(w) {
+            return (w.textInput && w.textInput.name === key) ||
+                   (w.selectionInput && w.selectionInput.name === key) ||
+                   (w.dateTimePicker && w.dateTimePicker.name === key);
+          });
+          if (!found2) missing.push(f.name);
+        }
+      });
+      add(wf, '全フィールド配置', missing.length === 0,
+        missing.length === 0 ? ('fields=' + fields.length) : ('欠落: ' + missing.join(',')),
+        'fieldId/order のズレか type 未対応の可能性');
+    } catch (e) {
+      add(wf, '全フィールド配置', false, 'throw: ' + e.message, '');
+    }
+
+    // 3) 空入力送信 → 必須バリデーションが働くか(DB書込に到達しない)
+    try {
+      var requiredFields = getWorkflowFields_(wf.id).filter(function(f){return f.required;});
+      if (requiredFields.length === 0) {
+        add(wf, '必須バリデーション', true, '必須項目なし(スキップ)', '');
+      } else {
+        var fakeEvent = {
+          chat: { user: fakeUser, buttonClickedPayload: { space: { name: fakeSpace } } },
+          commonEventObject: {
+            parameters: { actionName: 'submitWorkflow', workflowId: String(wf.id) },
+            formInputs: {} // 空
+          }
+        };
+        var resp = handleSubmitWorkflow_(fakeEvent);
+        // バリデーション失敗なら updateCard が返るはず(エラー文言付き)
+        var nav = resp && resp.action && resp.action.navigations && resp.action.navigations[0];
+        var errCard = nav && nav.updateCard;
+        var errText = '';
+        if (errCard) {
+          var ews = errCard.sections[0].widgets;
+          var head = ews[0] && ews[0].textParagraph && ews[0].textParagraph.text || '';
+          errText = head;
+        }
+        var ok = !!errCard && errText.indexOf('必須項目') !== -1;
+        add(wf, '必須バリデーション', ok,
+          ok ? ('必須=' + requiredFields.length + ' エラー表示OK') : ('応答=' + JSON.stringify(resp).substring(0,120)),
+          '空入力でDB書込に進んでしまうと重大。handleSubmitWorkflow_ の required チェックを確認。');
+      }
+    } catch (e) {
+      add(wf, '必須バリデーション', false, 'throw: ' + e.message, '');
+    }
+
+    // 4) 承認型のみ: トークン発行→検証
+    if (wf.type === '申請・承認') {
+      try {
+        var tok = generateToken_(wf.id, 2);
+        var v1 = validateToken_(tok, wf.id, 2);
+        var v2 = validateToken_('invalid_token_xxx', wf.id, 2);
+        var v3 = validateToken_(tok, wf.id, 99); // 他行で使えないこと
+        var ok = v1.ok && !v2.ok && !v3.ok;
+        add(wf, 'トークン発行→検証', ok,
+          'self=' + v1.ok + ' invalid=' + v2.ok + ' crossRow=' + v3.ok,
+          !ok ? 'トークン検証ロジックに問題。validateToken_ を確認。' : '');
+      } catch (e) {
+        add(wf, 'トークン発行→検証', false, 'throw: ' + e.message, '');
+      }
+
+      // 5) 無効トークンで handleApproval_ がエラーページ返すか
+      try {
+        var fakeE = { parameter: { token: 'bogus', wf: String(wf.id), row: '2', btn: '0', name: encodeURIComponent('test') } };
+        var html = handleApproval_(fakeE);
+        var htmlStr = html.getContent ? html.getContent() : String(html);
+        var ok2 = htmlStr.indexOf('無効なリクエスト') !== -1 || htmlStr.indexOf('🚫') !== -1;
+        add(wf, '無効トークン拒否', ok2, '応答長=' + htmlStr.length,
+          !ok2 ? 'bogus トークンで承認されてしまうかも。' : '');
+      } catch (e) {
+        add(wf, '無効トークン拒否', false, 'throw: ' + e.message, '');
+      }
+
+      // 6) 承認者未設定の警告(= 整合性チェックと重複だが、WF単位で可視化)
+      var approverStr = String(wf.approvers || '').trim();
+      add(wf, '承認者設定', !!approverStr, approverStr || '(空)',
+        !approverStr ? '承認カードを誰にも送れない。管理画面で承認者を追加。' : '');
+    }
+
+    // 7) 起動ボタン: linkedWorkflowId → ダイアログ生成可能か
+    try {
+      var btns = getWorkflowButtons_(wf.id);
+      var launches = btns.filter(function(b){return b.type === 'launch';});
+      if (launches.length === 0) {
+        add(wf, '起動ボタン', true, '起動ボタンなし(スキップ)', '');
+      } else {
+        var ngs = [];
+        launches.forEach(function(b) {
+          if (!b.linkedWorkflowId) { ngs.push('"' + b.name + '"→未設定'); return; }
+          try {
+            var child = buildWorkflowDialog_(b.linkedWorkflowId);
+            var hasCard = !!(child && child.action && child.action.navigations && child.action.navigations[0] &&
+                             (child.action.navigations[0].pushCard || child.action.navigations[0].updateCard));
+            if (!hasCard) ngs.push('"' + b.name + '"→#' + b.linkedWorkflowId + ' カード生成失敗');
+          } catch (e) { ngs.push('"' + b.name + '"→throw ' + e.message); }
+        });
+        add(wf, '起動ボタン', ngs.length === 0,
+          ngs.length === 0 ? ('OK ' + launches.length + '件') : ngs.join(' / '),
+          '子WFが削除/壊れている可能性');
+      }
+    } catch (e) {
+      add(wf, '起動ボタン', false, 'throw: ' + e.message, '');
+    }
+
+    // 8) /apply コマンド経由で可視か (execSpace フィルタ)
+    try {
+      var hasExec = String(wf.execSpace || '').trim().length > 0;
+      add(wf, '実行スペース設定', hasExec, wf.execSpace || '(未設定)',
+        !hasExec ? '/apply コマンドでスペース絞り込みが機能しない。空=全スペース扱い。' : '');
+    } catch (e) {}
+  });
+
+  _writeButtonDiagReport_(email, results, null);
+  var ng = results.filter(function(r){return !r.ok;}).length;
+  Logger.log('✅ ボタン挙動診断完了。NG=' + ng + ' / 全' + results.length + '件。「_ボタン挙動レポート」シート参照。');
+  return { ok: ng === 0, total: results.length, ng: ng };
+}
+
+function _writeButtonDiagReport_(email, results, note) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sh = ss.getSheetByName('_ボタン挙動レポート');
+  if (!sh) sh = ss.insertSheet('_ボタン挙動レポート');
+  sh.clear();
+  sh.appendRow(['=== ボタン挙動シミュレーションレポート ===']);
+  sh.appendRow(['生成日時', new Date()]);
+  sh.appendRow(['実行者', email]);
+  sh.appendRow(['バージョン', VERSION]);
+  if (note) sh.appendRow(['備考', note]);
+  sh.appendRow(['']);
+  sh.appendRow(['WF ID', 'WF名', 'シナリオ', '結果', '詳細', '対処ヒント']);
+  results.forEach(function(r) {
+    sh.appendRow([r.wfId, r.wfName, r.scenario, r.ok ? '✅ OK' : '❌ NG', r.detail, r.fix]);
+  });
+  sh.setFrozenRows(note ? 7 : 6);
+  try { sh.autoResizeColumns(1, 6); } catch (e) {}
+}
+
+// 全診断を一括実行するランチャー
+function runAllDiagnostics() {
+  var out = { roleSuite: null, env: null, button: null };
+  try { out.roleSuite = runRoleDebugSuite(); } catch (e) { out.roleSuite = { error: e.message }; }
+  try { out.env       = runEnvironmentDiagnostics(); } catch (e) { out.env = { error: e.message }; }
+  try { out.button    = runButtonBehaviorDiagnostics(); } catch (e) { out.button = { error: e.message }; }
+  Logger.log('=== runAllDiagnostics ===\n' + JSON.stringify(out, null, 2));
+  return out;
+}
+
 function _writeEnvDiagReport_(email, results) {
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   var sh = ss.getSheetByName('_環境診断レポート');
