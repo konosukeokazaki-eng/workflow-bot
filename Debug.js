@@ -762,9 +762,100 @@ function handleDiagRequest_(e) {
     return out;
   }
   var suite = String(e.parameter.diag || 'all');
+  if (suite === 'repair') {
+    var wfId = parseInt(e.parameter.wfId || '0', 10);
+    var apply = String(e.parameter.apply || '0') === '1';
+    out.setContent(JSON.stringify(repairWorkflowSchema_(wfId, apply)));
+    return out;
+  }
   var result = runDiagnosticsForWeb_(suite);
   out.setContent(JSON.stringify(result));
   return out;
+}
+
+// WF のデータシートに不足している「フィールド列」を補完する。
+// apply=false のときは dry-run (差分レポートのみ、書込なし)。
+// apply=true のときは実際に insertColumnBefore + _項目設定.dataCol 更新を行う。
+function repairWorkflowSchema_(wfId, apply) {
+  if (!wfId) return { ok: false, error: 'wfId 必須' };
+  var wf = getWorkflowById_(wfId);
+  if (!wf) return { ok: false, error: 'WF #' + wfId + ' が見つかりません' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var ds = ss.getSheetByName(wf.name);
+  if (!ds) return { ok: false, error: 'データシート "' + wf.name + '" が無い。初回申請で自動作成されるので修復不要' };
+  var fields = getWorkflowFields_(wfId, true); // deleted も含めて取る
+  var hdr = ds.getRange(1, 1, 1, ds.getLastColumn()).getValues()[0];
+  var plan = { wfId: wfId, wfName: wf.name, apply: apply, currentCols: hdr.length, currentHeader: hdr, actions: [] };
+
+  var statusIdx = hdr.indexOf('ステータス');
+  var msgIdx = hdr.indexOf('メッセージ名');
+  var insertBeforeName = statusIdx >= 0 ? 'ステータス' : (msgIdx >= 0 ? 'メッセージ名' : null);
+
+  // 削除フィールドは触らない(dataCol 保持したまま維持)
+  var activeFields = fields.filter(function(f){return !f.deleted;});
+  activeFields.forEach(function(f) {
+    var existingCol = hdr.indexOf(f.name) + 1;
+    if (existingCol > 0) {
+      // 既にヘッダに存在。dataCol と一致しているか確認
+      if (f.dataCol !== existingCol) {
+        plan.actions.push({ type: 'realignDataCol', field: f.name, oldDataCol: f.dataCol, newDataCol: existingCol });
+      } else {
+        plan.actions.push({ type: 'ok', field: f.name, dataCol: existingCol });
+      }
+    } else {
+      // ヘッダ欠落 → 挿入する
+      plan.actions.push({ type: 'insertColumn', field: f.name, before: insertBeforeName });
+    }
+  });
+
+  if (!apply) {
+    plan.ok = true;
+    plan.message = 'dry-run: ' + plan.actions.filter(function(a){return a.type==='insertColumn';}).length + '列挿入 / ' +
+      plan.actions.filter(function(a){return a.type==='realignDataCol';}).length + 'dataCol再割当 を計画';
+    return plan;
+  }
+
+  // --- apply パス ---
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return { ok: false, error: 'ロック取得失敗' };
+  var executedActions = [];
+  try {
+    // 1. 不足列を insertColumnBefore で順次挿入(毎回 beforeCol を取り直す)
+    plan.actions.forEach(function(a) {
+      if (a.type !== 'insertColumn') return;
+      var beforeCol = -1;
+      var curHdr = ds.getRange(1, 1, 1, ds.getLastColumn()).getValues()[0];
+      if (insertBeforeName) beforeCol = curHdr.indexOf(insertBeforeName) + 1;
+      var insertAt;
+      if (beforeCol > 0) { ds.insertColumnBefore(beforeCol); insertAt = beforeCol; }
+      else { insertAt = ds.getLastColumn() + 1; }
+      ds.getRange(1, insertAt).setValue(a.field);
+      executedActions.push({ type: 'insertColumn', field: a.field, at: insertAt });
+    });
+    SpreadsheetApp.flush();
+    // 2. _項目設定 の dataCol を実列位置と一致するよう再書換
+    var finalHdr = ds.getRange(1, 1, 1, ds.getLastColumn()).getValues()[0];
+    var fieldSheet = ss.getSheetByName(SHEET_FIELDS);
+    var frows = fieldSheet.getRange(2, 1, fieldSheet.getLastRow() - 1, 9).getValues();
+    for (var i = 0; i < frows.length; i++) {
+      if (frows[i][0] !== wfId) continue;
+      var fname = frows[i][1];
+      var isDel = frows[i][7] === true || frows[i][7] === 'TRUE' || frows[i][7] === 'true';
+      if (isDel) continue;
+      var realCol = finalHdr.indexOf(fname) + 1;
+      if (realCol > 0 && frows[i][8] !== realCol) {
+        fieldSheet.getRange(i + 2, 9).setValue(realCol);
+        executedActions.push({ type: 'realignDataCol', field: fname, newDataCol: realCol });
+      }
+    }
+    SpreadsheetApp.flush();
+    writeAuditLog_('schema.repair', 'wid=' + wfId, 'actions=' + executedActions.length);
+    return { ok: true, wfId: wfId, wfName: wf.name, apply: true, executedActions: executedActions, finalHeader: finalHdr };
+  } catch (err) {
+    return { ok: false, error: err.message, executedActions: executedActions };
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
 }
 
 function runDiagnosticsForWeb_(suite) {
