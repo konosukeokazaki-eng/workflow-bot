@@ -490,12 +490,214 @@ function runButtonBehaviorDiagnostics() {
       add(wf, '実行スペース設定', hasExec, wf.execSpace || '(未設定)',
         !hasExec ? '/apply コマンドでスペース絞り込みが機能しない。空=全スペース扱い。' : '');
     } catch (e) {}
+
+    // 9) スキーマ整合性: fields.dataCol と データシート header の一致
+    try {
+      var ss9 = SpreadsheetApp.openById(SPREADSHEET_ID);
+      var ds9 = ss9.getSheetByName(wf.name);
+      if (!ds9) {
+        add(wf, 'スキーマ整合性', true, 'データシート未作成(初回申請時に自動生成)', '');
+      } else {
+        var fieldsAll = getWorkflowFields_(wf.id);
+        var hdr = ds9.getRange(1, 1, 1, ds9.getLastColumn()).getValues()[0];
+        var mismatches = [];
+        fieldsAll.forEach(function(f) {
+          if (!f.dataCol || f.dataCol <= 0) { mismatches.push(f.name + '→dataCol未設定'); return; }
+          if (f.dataCol > hdr.length) { mismatches.push(f.name + '→col ' + f.dataCol + ' が範囲外(hdr=' + hdr.length + ')'); return; }
+          if (hdr[f.dataCol - 1] !== f.name) mismatches.push(f.name + '→col ' + f.dataCol + ' は "' + hdr[f.dataCol - 1] + '"');
+        });
+        // 承認型はステータス列が必要
+        if (wf.type === '申請・承認' && hdr.indexOf('ステータス') === -1) mismatches.push('ステータス列欠落');
+        if (hdr.indexOf('メッセージ名') === -1) mismatches.push('メッセージ名列欠落');
+        add(wf, 'スキーマ整合性', mismatches.length === 0,
+          mismatches.length === 0 ? 'OK fields=' + fieldsAll.length + ' cols=' + hdr.length : mismatches.join(' / '),
+          'dataCol と header のズレ。ensureDataSheetSchema_ 実行またはフィールド再保存で復旧。');
+      }
+    } catch (e) {
+      add(wf, 'スキーマ整合性', false, 'throw: ' + e.message, '');
+    }
+
+    // 10) 書込経路シミュレーション: 合成入力で handleSubmitWorkflow_ の全パスを "試算" する
+    //     (実書込・実送信は呼ばない。row 構築と承認カード構造までを検証)
+    try {
+      if (wf.type === '申請・承認' && !String(wf.approvers || '').trim()) {
+        add(wf, '書込経路試算', true, '承認者空ガード優先のためスキップ', '');
+      } else {
+        var simRes = _simulateSubmitFlow_(wf);
+        add(wf, '書込経路試算', simRes.ok, simRes.detail, simRes.fix);
+      }
+    } catch (e) {
+      add(wf, '書込経路試算', false, 'throw: ' + e.message, '');
+    }
+
+    // 11) 承認カード構造(承認型のみ): sendApprovalCard の内部処理を模倣して cardsV2 構造を検証
+    if (wf.type === '申請・承認' && String(wf.approvers || '').trim()) {
+      try {
+        var cardRes = _simulateApprovalCardBuild_(wf);
+        add(wf, '承認カード構造', cardRes.ok, cardRes.detail, cardRes.fix);
+      } catch (e) {
+        add(wf, '承認カード構造', false, 'throw: ' + e.message, '');
+      }
+    }
+
+    // 12) 連鎖フロー: launch ボタンから子/孫までのダイアログを3階層まで辿れるか
+    try {
+      var chainRes = _simulateChainFlow_(wf, 1, []);
+      if (chainRes.steps.length > 0) {
+        add(wf, '連鎖フロー', chainRes.ok, 'depth=' + chainRes.depth + ' path=' + chainRes.steps.join('→'),
+          !chainRes.ok ? chainRes.fix : '');
+      }
+    } catch (e) {
+      add(wf, '連鎖フロー', false, 'throw: ' + e.message, '');
+    }
   });
 
   _writeButtonDiagReport_(email, results, null);
   var ng = results.filter(function(r){return !r.ok;}).length;
   Logger.log('✅ ボタン挙動診断完了。NG=' + ng + ' / 全' + results.length + '件。「_ボタン挙動レポート」シート参照。');
   return { ok: ng === 0, total: results.length, ng: ng, results: results };
+}
+
+// 合成入力を生成(フィールドタイプごとに「ありえる値」を1件)
+function _synthValuesForFields_(fields) {
+  var vals = {};
+  fields.forEach(function(f) {
+    switch (f.type) {
+      case 'text': vals[f.name] = '診断テスト'; break;
+      case 'textarea': vals[f.name] = '診断テスト本文'; break;
+      case 'dropdown':
+      case 'checkbox':
+        var opts = String(f.options || '').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+        vals[f.name] = opts[0] || '';
+        break;
+      case 'date': vals[f.name] = new Date().toLocaleDateString('ja-JP'); break;
+      case 'checkbox_qty':
+        var qp = parseQtyOptions_(f.options);
+        var items = qp.opts.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+        vals[f.name] = items.length ? (items[0] + '×1') : '';
+        break;
+      default: vals[f.name] = '';
+    }
+  });
+  return vals;
+}
+
+// handleSubmitWorkflow_ の書込経路を "読み取りのみ" で再現する。
+// 実行する: row 構築、header-dataCol マッピング、status/msg 列検出、承認者解決、ロック取得テスト
+// 実行しない: appendRow / UrlFetchApp.fetch / setValue / 監査ログ書込
+function _simulateSubmitFlow_(wf) {
+  var fields = getWorkflowFields_(wf.id);
+  var values = _synthValuesForFields_(fields);
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var ds = ss.getSheetByName(wf.name);
+  var pseudoSchema = !ds;
+  var hdr;
+  if (!ds) {
+    hdr = ['タイムスタンプ', '送信者', '送信者メール'];
+    fields.forEach(function(f) { hdr.push(f.name); });
+    if (wf.type === '申請・承認') hdr.push('ステータス');
+    hdr.push('メッセージ名');
+  } else {
+    hdr = ds.getRange(1, 1, 1, ds.getLastColumn()).getValues()[0];
+  }
+  var row = new Array(hdr.length);
+  for (var i = 0; i < hdr.length; i++) row[i] = '';
+  row[0] = new Date(); row[1] = '診断ユーザー'; row[2] = 'diag@example.com';
+  var unmappedFields = [];
+  fields.forEach(function(f) {
+    var col;
+    if (pseudoSchema) {
+      col = hdr.indexOf(f.name) + 1;
+    } else {
+      col = f.dataCol && f.dataCol > 0 ? f.dataCol : -1;
+      if (col <= 0 || col > hdr.length) { unmappedFields.push(f.name); return; }
+    }
+    if (col > 0) row[col - 1] = values[f.name];
+  });
+  var statusIdx = hdr.indexOf('ステータス');
+  var msgIdx = hdr.indexOf('メッセージ名');
+  if (wf.type === '申請・承認' && statusIdx < 0) {
+    return { ok: false, detail: 'ステータス列が無く承認型として機能しない', fix: 'ensureDataSheetSchema_ で復旧' };
+  }
+  if (msgIdx < 0 && !pseudoSchema) {
+    return { ok: false, detail: 'メッセージ名列が無く承認カード更新ができない', fix: 'ensureDataSheetSchema_ で復旧' };
+  }
+  if (unmappedFields.length > 0) {
+    return { ok: false, detail: 'dataCol 未解決: ' + unmappedFields.join(','), fix: 'フィールドを再保存' };
+  }
+  // ロック取得できるか
+  var lock = LockService.getScriptLock();
+  var lockOk = lock.tryLock(500);
+  if (lockOk) try { lock.releaseLock(); } catch (e) {}
+  if (!lockOk) return { ok: false, detail: 'LockService 取得不可(他処理で保持中)', fix: '時間をおいて再実行' };
+  // 外部シート設定の URL パース可否
+  if (wf.externalSheet) {
+    var m = String(wf.externalSheet).match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (!m) return { ok: false, detail: '外部シートURL形式不正', fix: 'URLを修正' };
+  }
+  return { ok: true, detail: 'row構築OK cols=' + hdr.length + ' pseudo=' + pseudoSchema, fix: '' };
+}
+
+// sendApprovalCard_ の内部処理を模倣して cardsV2 の必須構造を検証(実送信しない)
+function _simulateApprovalCardBuild_(wf) {
+  var fields = getWorkflowFields_(wf.id);
+  var values = _synthValuesForFields_(fields);
+  var buttons = getWorkflowButtons_(wf.id);
+  if (buttons.length === 0) buttons = [{ name: '承認', status: '承認', color: 'green' }, { name: '却下', status: '却下', color: 'red' }];
+  var widgets = [{ decoratedText: { topLabel: '送信者', text: '診断ユーザー' } }];
+  fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name] || '(なし)'), wrapText: true } }); });
+  widgets.push({ decoratedText: { topLabel: 'ステータス', text: '⏳ 承認待ち' } });
+  var token;
+  try { token = generateToken_(wf.id, 2); } catch (e) { return { ok: false, detail: 'トークン発行失敗: ' + e.message, fix: '' }; }
+  var btnStructOK = true, btnDetail = [];
+  buttons.forEach(function(b, idx) {
+    if (b.type === 'launch') {
+      if (!b.linkedWorkflowId) { btnStructOK = false; btnDetail.push('launch "' + b.name + '" linkedWorkflowId欠落'); return; }
+      var child = getWorkflowById_(b.linkedWorkflowId);
+      if (!child) { btnStructOK = false; btnDetail.push('launch "' + b.name + '" child #' + b.linkedWorkflowId + ' 不存在'); return; }
+      btnDetail.push('launch→#' + b.linkedWorkflowId);
+    } else {
+      if (!FUNCTION_URL) { btnStructOK = false; btnDetail.push('status "' + b.name + '" FUNCTION_URL未設定'); return; }
+      btnDetail.push('status→' + (b.status || '(空)'));
+    }
+  });
+  var sendTo = wf.targetSpace || '';
+  if (!sendTo) {
+    return { ok: false, detail: 'targetSpace未設定(実行スペースでフォールバック想定)', fix: 'targetSpace を明示または inheritFrom が確実に渡る導線を確認' };
+  }
+  return { ok: btnStructOK, detail: 'widgets=' + widgets.length + ' buttons=[' + btnDetail.join(',') + '] token=OK', fix: !btnStructOK ? btnDetail.join('/') : '' };
+}
+
+// launch ボタンを辿って最大3階層までダイアログ生成が通るか
+function _simulateChainFlow_(wf, depth, path) {
+  var out = { ok: true, depth: depth, steps: path.concat(['#' + wf.id]), fix: '' };
+  if (depth >= 3) {
+    // chain 上限は chain>=3 で打ち切り(handleApproval_ の仕様)。3層目にはダイアログを開かない。
+    out.steps.push('(上限)');
+    return out;
+  }
+  var btns = getWorkflowButtons_(wf.id);
+  var launches = btns.filter(function(b){return b.type === 'launch' && b.linkedWorkflowId;});
+  if (launches.length === 0) return { ok: true, depth: depth, steps: [], fix: '' };
+  for (var i = 0; i < launches.length; i++) {
+    var child = getWorkflowById_(launches[i].linkedWorkflowId);
+    if (!child) {
+      return { ok: false, depth: depth, steps: out.steps.concat(['×#' + launches[i].linkedWorkflowId]),
+        fix: 'launch先WFが見つからない' };
+    }
+    // 子のダイアログを生成試行
+    try {
+      var dlg = buildWorkflowDialog_(child.id);
+      if (!dlg || !dlg.action) return { ok: false, depth: depth, steps: out.steps.concat(['#' + child.id + '(dlg失敗)']), fix: '子WFダイアログ生成失敗' };
+    } catch (e) {
+      return { ok: false, depth: depth, steps: out.steps.concat(['#' + child.id + '(throw)']), fix: e.message };
+    }
+    // 孫レベル
+    var sub = _simulateChainFlow_(child, depth + 1, out.steps);
+    if (!sub.ok) return sub;
+    out = sub;
+  }
+  return out;
 }
 
 function _writeButtonDiagReport_(email, results, note) {
