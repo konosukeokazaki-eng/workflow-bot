@@ -661,11 +661,9 @@ function _simulateApprovalCardBuild_(wf) {
       btnDetail.push('status→' + (b.status || '(空)'));
     }
   });
-  var sendTo = wf.targetSpace || '';
-  if (!sendTo) {
-    return { ok: false, detail: 'targetSpace未設定(実行スペースでフォールバック想定)', fix: 'targetSpace を明示または inheritFrom が確実に渡る導線を確認' };
-  }
-  return { ok: btnStructOK, detail: 'widgets=' + widgets.length + ' buttons=[' + btnDetail.join(',') + '] token=OK', fix: !btnStructOK ? btnDetail.join('/') : '' };
+  // targetSpace 空は仕様上OK(実行スペース=buttonClickedPayload.space をフォールバック使用)
+  var sendTo = wf.targetSpace || '(実行スペースフォールバック)';
+  return { ok: btnStructOK, detail: 'widgets=' + widgets.length + ' buttons=[' + btnDetail.join(',') + '] token=OK sendTo=' + sendTo, fix: !btnStructOK ? btnDetail.join('/') : '' };
 }
 
 // launch ボタンを辿って最大3階層までダイアログ生成が通るか
