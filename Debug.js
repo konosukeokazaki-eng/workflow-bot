@@ -6,8 +6,7 @@
 // ============================================================
 
 function runRoleDebugSuite() {
-  var email = '';
-  try { email = Session.getActiveUser().getEmail(); } catch (e) {}
+  var email = _getDiagRunnerEmail_();
   if (!email) throw new Error('実行者メールが取得できません');
   var realRole = getUserRole_(email);
   if (realRole !== ROLE_OWNER) throw new Error('このデバッグ関数は実オーナーのみ実行可能です(現在: ' + realRole + ')');
@@ -129,8 +128,7 @@ function _writeDebugReport_(email, realRole, summary, perRole) {
 // Apps Script エディタから実オーナーが手動で実行する。
 // ============================================================
 function runEnvironmentDiagnostics() {
-  var email = '';
-  try { email = Session.getActiveUser().getEmail(); } catch (e) {}
+  var email = _getDiagRunnerEmail_();
   if (!email) throw new Error('実行者メールが取得できません');
   var realRole = getUserRole_(email);
   if (realRole !== ROLE_OWNER) throw new Error('このデバッグ関数は実オーナーのみ実行可能です(現在: ' + realRole + ')');
@@ -297,8 +295,7 @@ function runEnvironmentDiagnostics() {
 // 書き込み・Chat API 送信は一切行わない。
 // ============================================================
 function runButtonBehaviorDiagnostics() {
-  var email = '';
-  try { email = Session.getActiveUser().getEmail(); } catch (e) {}
+  var email = _getDiagRunnerEmail_();
   if (!email) throw new Error('実行者メールが取得できません');
   var realRole = getUserRole_(email);
   if (realRole !== ROLE_OWNER) throw new Error('このデバッグ関数は実オーナーのみ実行可能です(現在: ' + realRole + ')');
@@ -492,6 +489,22 @@ function _writeButtonDiagReport_(email, results, note) {
 }
 
 // 全診断を一括実行するランチャー
+// 匿名 Web App 呼び出し時は getActiveUser が空になるので
+// getEffectiveUser(deployer) にフォールバックする。
+function _getDiagRunnerEmail_() {
+  try {
+    var a = Session.getActiveUser().getEmail();
+    if (a) return a;
+  } catch (e) {}
+  try {
+    var ef = Session.getEffectiveUser().getEmail();
+    if (ef) return ef;
+  } catch (e) {}
+  try {
+    return PropertiesService.getScriptProperties().getProperty('DIAG_RUNNER_EMAIL') || '';
+  } catch (e) { return ''; }
+}
+
 function runAllDiagnostics() {
   var out = { roleSuite: null, env: null, button: null };
   try { out.roleSuite = runRoleDebugSuite(); } catch (e) { out.roleSuite = { error: e.message }; }
