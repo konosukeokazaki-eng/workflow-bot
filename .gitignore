@@ -3,3 +3,16 @@ node_modules/
 *.log
 .clasprc.json
 .clasp.json
+
+# 副業・アーカイブ（公開しない）
+archive/
+package/
+sales/
+handoff/
+workflow-bot-v1.0.0/
+workflow-bot-v1.0.0.zip
+workflow-bot-sideproject-*.zip
+build_combined_source.py
+build_manual.py
+workflow-bot_全ソース_v1.5.1.txt
+workflow-bot_運用マニュアル_v1.0.docx

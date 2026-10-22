@@ -1,0 +1,16 @@
+**/node_modules/**
+playwright/**
+*.log
+.env*
+diag_result.json
+repair_dry.json
+repair_apply.json
+
+# 副業・アーカイブ（本番にpushしない）
+archive/**
+package/**
+sales/**
+handoff/**
+workflow-bot-v1.0.0/**
+workflow-bot-v1.0.0.zip
+workflow-bot-sideproject-*.zip
