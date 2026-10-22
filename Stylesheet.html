@@ -99,6 +99,11 @@ body { font-family:var(--font); background:var(--c-bg); color:var(--c-text); fon
 .wf-item-left { flex:1; min-width:0; }
 .wf-item-name { font-size:14px; font-weight:500; color:var(--c-text); letter-spacing:0; }
 .wf-item-meta { font-size:11px; color:var(--c-text-muted); margin-top:3px; display:flex; align-items:center; gap:6px; }
+.wf-item-child { margin-left:16px; background:transparent; animation:wfChildIn 0.2s ease-out; }
+.wf-item-child .wf-item-name { font-size:13px; color:var(--c-text-sub); }
+.wf-child-arrow { font-size:16px !important; color:var(--c-text-faint); margin-right:2px; }
+.wf-child-hint { font-size:14px !important; color:var(--c-primary,#1a73e8); margin-left:6px; opacity:.75; vertical-align:middle; }
+@keyframes wfChildIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:translateY(0); } }
 
 /* Main */
 .main { overflow-y:auto; padding:24px; }

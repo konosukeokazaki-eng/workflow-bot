@@ -2,7 +2,7 @@
 /* ============================================================
    State
    ============================================================ */
-var workflows=[], currentWfId=null, currentFields=[], currentButtons=[], currentParents=[], spaces=[], spacesLoading=true, admins=[];
+var workflows=[], currentWfId=null, currentFields=[], currentButtons=[], currentParents=[], spaces=[], spacesLoading=true, admins=[], linkRelations=[];
 var isDirty=false;
 var wfEditorTab='basic';
 var COLORS={green:'#34a853',blue:'#1a73e8',yellow:'#f9ab00',orange:'#e65100',red:'#c62828',gray:'#888'};
@@ -18,6 +18,7 @@ function isEditorPlus(){return currentRole==='owner'||currentRole==='editor';}
 window.onload=function(){
   try{workflows=__initialData||[];}catch(e){}
   try{admins=__initialAdmins||[];_normalizeAdmins();}catch(e){}
+  try{linkRelations=__initialLinks||[];}catch(e){}
   renderList();
   spacesLoading=true;
   google.script.run.withSuccessHandler(function(d){spaces=d||[];spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).withFailureHandler(function(){spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).api_getSpaces();
@@ -56,14 +57,45 @@ function renderList(){
   if(!workflows.length){el.innerHTML='<div class="empty"><p style="font-size:13px">ワークフローがありません</p></div>';return;}
   var q=(document.getElementById('wfSearch')||{}).value||'';
   q=q.trim().toLowerCase();
-  var filtered=q?workflows.filter(function(w){return String(w.name||'').toLowerCase().indexOf(q)!==-1;}):workflows;
-  if(!filtered.length){el.innerHTML='<div class="empty"><p style="font-size:13px">「'+esc(q)+'」に一致するワークフローはありません</p></div>';return;}
-  el.innerHTML=filtered.map(function(wf){
-    var tb=wf.type==='申請・承認'?'<span class="badge badge-approval">承認</span>':'<span class="badge badge-template">定型文</span>';
-    var sb=wf.status==='有効'?'<span class="badge badge-active">有効</span>':'<span class="badge badge-inactive">無効</span>';
-    var toggleHtml=(wf.canEdit===false)?'':'<label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" '+(wf.status==='有効'?'checked':'')+' onchange="toggleWf('+wf.id+')"><span class="toggle-slider"></span></label>';
-    return '<div class="wf-item'+(wf.id===currentWfId?' active':'')+'" onclick="selectWf('+wf.id+')"><div class="wf-item-left"><div class="wf-item-name">'+esc(wf.name)+'</div><div class="wf-item-meta">'+tb+sb+'</div></div>'+toggleHtml+'</div>';
-  }).join('');
+  // 子WF(他WFから launch 連動されているもの)の集合と、親→子マップを構築
+  var childSet={}, childrenOf={};
+  (linkRelations||[]).forEach(function(r){
+    childSet[r.child]=true;
+    if(!childrenOf[r.parent])childrenOf[r.parent]=[];
+    childrenOf[r.parent].push(r);
+  });
+  var wfById={};workflows.forEach(function(w){wfById[w.id]=w;});
+  // 検索中は全マッチを平坦表示。通常時はトップレベル(=子でないもの)のみ表示し、
+  // 選択中WFの直下に連動子WFをインデント表示する。
+  var items=[];
+  if(q){
+    var matched=workflows.filter(function(w){return String(w.name||'').toLowerCase().indexOf(q)!==-1;});
+    if(!matched.length){el.innerHTML='<div class="empty"><p style="font-size:13px">「'+esc(q)+'」に一致するワークフローはありません</p></div>';return;}
+    matched.forEach(function(wf){items.push(_renderWfItem(wf,false,null));});
+  }else{
+    workflows.forEach(function(wf){
+      if(childSet[wf.id])return; // 子は親の下にのみ表示
+      items.push(_renderWfItem(wf,false,null));
+      // 選択されている親なら、その連動子WFをインデント表示
+      if(wf.id===currentWfId && childrenOf[wf.id] && childrenOf[wf.id].length){
+        childrenOf[wf.id].forEach(function(rel){
+          var cwf=wfById[rel.child];
+          if(!cwf)return;
+          items.push(_renderWfItem(cwf,true,rel));
+        });
+      }
+    });
+  }
+  el.innerHTML=items.join('');
+}
+function _renderWfItem(wf,isChild,rel){
+  var tb=wf.type==='申請・承認'?'<span class="badge badge-approval">承認</span>':'<span class="badge badge-template">定型文</span>';
+  var sb=wf.status==='有効'?'<span class="badge badge-active">有効</span>':'<span class="badge badge-inactive">無効</span>';
+  var toggleHtml=(wf.canEdit===false)?'':'<label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" '+(wf.status==='有効'?'checked':'')+' onchange="toggleWf('+wf.id+')"><span class="toggle-slider"></span></label>';
+  var cls='wf-item'+(wf.id===currentWfId?' active':'')+(isChild?' wf-item-child':'');
+  var prefix=isChild?'<span class="wf-child-arrow mi" title="'+esc(rel?rel.buttonName:'')+'">subdirectory_arrow_right</span>':'';
+  var childHint=(!isChild && (linkRelations||[]).some(function(r){return r.parent===wf.id;}))?' <span class="wf-child-hint mi" title="連動先ワークフローあり">hub</span>':'';
+  return '<div class="'+cls+'" onclick="selectWf('+wf.id+')">'+prefix+'<div class="wf-item-left"><div class="wf-item-name">'+esc(wf.name)+childHint+'</div><div class="wf-item-meta">'+tb+sb+'</div></div>'+toggleHtml+'</div>';
 }
 function toggleWf(id){run('api_toggleStatus',id,function(r){if(r.success){var w=workflows.find(function(w){return w.id===id});if(w)w.status=r.status;renderList();showToast((r.status==='有効'?'有効':'無効')+'にしました');}});}
 function selectWf(id){
@@ -411,7 +443,8 @@ function doSaveWorkflow(data){
       showToast('保存しました'+(r.diff?' ('+r.diff+')':''));
       // Bot 未参加や外部シート書込不可などの警告があればモーダルで通知(サイレント失敗の事前予防)
       if(r.warnings && r.warnings.length){ showSaveWarnings(r.warnings); }
-      renderList();
+      // 連動関係が変わっている可能性があるのでサイドバーの階層表示を更新
+      google.script.run.withSuccessHandler(function(lr){linkRelations=lr||[];renderList();}).withFailureHandler(function(){renderList();}).api_getLinkRelations();
     });
   });
 }

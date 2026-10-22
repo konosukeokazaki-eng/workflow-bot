@@ -13,6 +13,7 @@ function getAdminPage_() {
   tpl.initialData = JSON.stringify(getAllWorkflowsForRender_());
   tpl.initialSpaces = '[]';
   tpl.initialAdmins = JSON.stringify(getAdminsForRender_());
+  tpl.initialLinks = JSON.stringify(getLinkRelations_());
   var _cu = Session.getActiveUser().getEmail();
   tpl.currentUser = _cu;
   tpl.currentRole = getUserRole_(_cu) || ROLE_OWNER;
@@ -190,6 +191,32 @@ function api_getButtons(wid) {
 function api_getWorkflowDetail(wid) {
   try { requireAdmin_(); return { fields: getWorkflowFields_(wid), buttons: getWorkflowButtons_(wid), parents: findLaunchParents_(wid) }; }
   catch (err) { recordDataError_('api_getWorkflowDetail', err); return { fields: [], buttons: [], parents: [] }; }
+}
+
+// 全ワークフローのlaunch連動関係を [{parent, child, buttonName, color, inheritThread, status}] で返す。
+// 画面サイドバーの階層表示用。
+function getLinkRelations_() {
+  try {
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var bt = ss.getSheetByName(SHEET_BUTTONS);
+    if (!bt || bt.getLastRow() < 2) return [];
+    var lastCol = Math.max(12, bt.getLastColumn());
+    var data = bt.getRange(2, 1, bt.getLastRow() - 1, lastCol).getValues();
+    var truthy = function(v) { return v === true || v === 'TRUE' || v === 'true'; };
+    var out = [];
+    data.forEach(function(r) {
+      if (String(r[9] || '').trim() !== 'launch') return;
+      var child = Number(r[10]);
+      if (!child) return;
+      out.push({ parent: Number(r[0]), child: child, buttonName: r[1], color: r[3] || 'gray', inheritThread: truthy(r[11]), status: r[2] || '' });
+    });
+    return out;
+  } catch (err) { recordDataError_('getLinkRelations_', err); return []; }
+}
+
+function api_getLinkRelations() {
+  try { requireAdmin_(); return getLinkRelations_(); }
+  catch (err) { recordDataError_('api_getLinkRelations', err); return []; }
 }
 
 // 指定WF ID を launch ボタンから参照している親 WF を全て返す。
