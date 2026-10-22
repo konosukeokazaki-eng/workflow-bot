@@ -135,6 +135,12 @@ function handleSubmitWorkflow_(event) {
   var parentInfo = parentWorkflowId && parentRow ? { parentWorkflowId: parentWorkflowId, parentRow: parentRow, parentStatus: parentStatus } : null;
   var wf = getWorkflowById_(workflowId);
   if (!wf) return createMessage_('ワークフローが見つかりません。');
+  // 承認型なのに承認者が未設定だと申請が「宙に浮く」(誰も承認/却下できない)
+  // ため早期エラーで止める。管理画面側のバリデーションは新規作成時のみ効くので、
+  // レガシーデータや直接編集で承認者が空のまま運用されている場合の防衛線として置く。
+  if (wf.type === '申請・承認' && !String(wf.approvers || '').trim()) {
+    return createMessage_('⚠️ このワークフロー「' + wf.name + '」は承認者が未設定のため申請できません。管理者に連絡してください: ' + CONTACT_EMAIL);
+  }
   var fields = getWorkflowFields_(workflowId);
   var senderName = '', senderEmail = '';
   if (event.chat && event.chat.user) { senderName = event.chat.user.displayName || ''; senderEmail = event.chat.user.email || ''; }

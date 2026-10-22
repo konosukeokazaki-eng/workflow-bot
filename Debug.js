@@ -429,6 +429,31 @@ function runButtonBehaviorDiagnostics() {
       var approverStr = String(wf.approvers || '').trim();
       add(wf, '承認者設定', !!approverStr, approverStr || '(空)',
         !approverStr ? '承認カードを誰にも送れない。管理画面で承認者を追加。' : '');
+
+      // 6b) 承認者空のWFに submit した場合、ガードで止まるか(宙に浮いた申請を防ぐ防衛線)
+      if (!approverStr) {
+        try {
+          var guardEvent = {
+            chat: { user: fakeUser, buttonClickedPayload: { space: { name: fakeSpace } } },
+            commonEventObject: {
+              parameters: { actionName: 'submitWorkflow', workflowId: String(wf.id) },
+              formInputs: {}
+            }
+          };
+          var guardResp = handleSubmitWorkflow_(guardEvent);
+          var txt = '';
+          if (guardResp && guardResp.hostAppDataAction && guardResp.hostAppDataAction.chatDataAction &&
+              guardResp.hostAppDataAction.chatDataAction.createMessageAction &&
+              guardResp.hostAppDataAction.chatDataAction.createMessageAction.message) {
+            txt = guardResp.hostAppDataAction.chatDataAction.createMessageAction.message.text || '';
+          }
+          var guarded = txt.indexOf('承認者が未設定') !== -1;
+          add(wf, '承認者空ガード', guarded, txt.substring(0, 80),
+            !guarded ? '承認者空なのに submit が止まらない。handleSubmitWorkflow_ のガードを確認。' : '');
+        } catch (e) {
+          add(wf, '承認者空ガード', false, 'throw: ' + e.message, '');
+        }
+      }
     }
 
     // 7) 起動ボタン: linkedWorkflowId → ダイアログ生成可能か
