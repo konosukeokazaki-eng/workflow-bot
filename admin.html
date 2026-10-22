@@ -8,6 +8,13 @@
   <?!= include('Stylesheet'); ?>
 </head>
 <body>
+<? if (realRole === 'owner' && debugRoleOverride) { ?>
+<div class="debug-banner" id="debugBanner">
+  <span class="mi" style="font-size:16px;vertical-align:middle">bug_report</span>
+  <b>デバッグモード:</b>&nbsp;現在「<?!= debugRoleOverride ?>」として表示中。実際の権限は owner のまま。
+  <button onclick="setDebugRole('')">解除</button>
+</div>
+<? } ?>
 <div class="app">
   <div class="sidebar">
     <div class="sidebar-header"><h1>ワークフロー</h1><button class="btn btn-primary btn-sm" onclick="createNew()"><span class="mi" style="font-size:18px">add</span>新規</button></div>
@@ -21,6 +28,16 @@
       <button class="btn btn-ghost" onclick="showArchive()">アーカイブ</button>
       <button class="btn btn-ghost" onclick="showHelp()">ヘルプ</button>
       <button class="btn btn-ghost" onclick="window.open(__execUrl + '?doc=manual','_blank')" title="運用マニュアルを別タブで開く">運用マニュアル</button>
+      <? if (realRole === 'owner') { ?>
+      <div class="debug-role-box" id="debugRoleBox">
+        <div class="debug-role-label"><span class="mi" style="font-size:14px;vertical-align:middle">bug_report</span> デバッグ: 権限シミュレート</div>
+        <select id="debugRoleSelect" onchange="setDebugRole(this.value)">
+          <option value="">オーナー(実権限)</option>
+          <option value="editor">エディター として表示</option>
+          <option value="member">メンバー として表示</option>
+        </select>
+      </div>
+      <? } ?>
       <div class="sidebar-meta">
         <span>v<?!= appVersion ?> · <?!= envName ?></span>
       </div>
@@ -34,6 +51,8 @@
   var __initialLinks = <?!= initialLinks ?>;
   var __currentUser = '<?!= currentUser ?>';
   var __currentRole = '<?!= currentRole ?>';
+  var __realRole = '<?!= realRole ?>';
+  var __debugRoleOverride = '<?!= debugRoleOverride ?>';
   var __execUrl = '<?!= selfUrl ?>';
 </script>
 <?!= include('JavaScript'); ?>

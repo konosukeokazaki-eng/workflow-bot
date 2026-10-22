@@ -19,6 +19,8 @@ window.onload=function(){
   try{workflows=__initialData||[];}catch(e){}
   try{admins=__initialAdmins||[];_normalizeAdmins();}catch(e){}
   try{linkRelations=__initialLinks||[];}catch(e){}
+  // デバッグロール選択の初期化(オーナー専用UI)
+  try{var ds=document.getElementById('debugRoleSelect');if(ds&&typeof __debugRoleOverride!=='undefined')ds.value=__debugRoleOverride||'';}catch(e){}
   renderList();
   spacesLoading=true;
   google.script.run.withSuccessHandler(function(d){spaces=d||[];spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).withFailureHandler(function(){spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).api_getSpaces();
@@ -45,6 +47,17 @@ function showPrivacyModal(){
 function acceptPrivacy(){
   showLoading('記録中...');
   google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){document.querySelector('.modal-overlay').remove();showToast('ご同意ありがとうございます');}else{showToast('エラー: '+(r.error||''));}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_recordPrivacyAcceptance();
+}
+// デバッグ用: 自分の表示上のロールを一時的に editor/member に切り替えて UI/権限挙動を検証する。
+// サーバ側で UserCache に保存され、api_* の権限判定もオーバーライド値に従う(実権限は owner のまま)。
+function setDebugRole(role){
+  if(isDirty&&!confirm('未保存の変更があります。破棄してロールを切り替えますか？'))return;
+  showLoading('ロール切替中...');
+  google.script.run.withSuccessHandler(function(r){
+    hideLoading();
+    if(r&&r.success){ location.reload(); }
+    else{ showToast('エラー: '+(r&&r.error||'')); }
+  }).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_setDebugRole(role);
 }
 window.onbeforeunload=function(){if(isDirty)return '未保存の変更があります。ページを離れますか？';};
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){var ov=document.querySelector('.modal-overlay');if(ov)ov.remove();}});
@@ -442,10 +455,10 @@ function doSaveWorkflow(data){
     run('api_getWorkflowDetail',r.id,function(d){
       currentFields=d.fields||[];currentButtons=d.buttons||[];currentParents=d.parents||[];
       showToast('保存しました'+(r.diff?' ('+r.diff+')':''));
-      // Bot 未参加や外部シート書込不可などの警告があればモーダルで通知(サイレント失敗の事前予防)
-      if(r.warnings && r.warnings.length){ showSaveWarnings(r.warnings); }
       // 連動関係が変わっている可能性があるのでサイドバーの階層表示を更新
       google.script.run.withSuccessHandler(function(lr){linkRelations=lr||[];renderList();}).withFailureHandler(function(){renderList();}).api_getLinkRelations();
+      // Bot参加状態/外部シート接続のチェックは保存クリティカルパスから外し非同期で実行(数秒~十秒級だったため)
+      google.script.run.withSuccessHandler(function(v){if(v&&v.warnings&&v.warnings.length)showSaveWarnings(v.warnings);}).withFailureHandler(noop).api_verifyWorkflowSetup(r.id);
     });
   });
 }

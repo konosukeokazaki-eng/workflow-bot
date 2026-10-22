@@ -95,6 +95,48 @@ function getUserRole_(email) {
   } catch (err) { Logger.log('getUserRole_ エラー: ' + err.message); return null; }
 }
 
+// ---------- デバッグ用ロールオーバーライド ----------
+// 実オーナーのみ、自分の見かけ上のロールを一時的に editor/member に降格して UI/権限挙動を確認できる。
+// UserCache に保持(6時間 TTL)。本当のオーナー権限を失うわけではないので、解除は常に可能。
+var DEBUG_ROLE_CACHE_KEY = 'debug_role_override';
+var DEBUG_ROLE_TTL = 21600; // 6h
+
+function getDebugRoleOverride_() {
+  try { return CacheService.getUserCache().get(DEBUG_ROLE_CACHE_KEY) || null; } catch (e) { return null; }
+}
+
+// 実ロールに加えてデバッグオーバーライドを考慮した「表示上のロール」。
+// 実ロールが owner のときのみ降格オーバーライドが効く(非オーナーは昇格不可)。
+function getEffectiveUserRole_(email) {
+  var real = getUserRole_(email);
+  if (real !== ROLE_OWNER) return real;
+  var ov = getDebugRoleOverride_();
+  if (ov === ROLE_EDITOR || ov === ROLE_MEMBER) return ov;
+  return real;
+}
+
+function api_setDebugRole(role) {
+  try {
+    var email = requireAdmin_();
+    if (getUserRole_(email) !== ROLE_OWNER) return { success: false, error: 'オーナーのみ利用できます' };
+    var cache = CacheService.getUserCache();
+    if (!role || role === ROLE_OWNER) {
+      cache.remove(DEBUG_ROLE_CACHE_KEY);
+      writeAuditLog_('debug.role_clear', email, '');
+      return { success: true, role: ROLE_OWNER };
+    }
+    if (role !== ROLE_EDITOR && role !== ROLE_MEMBER) return { success: false, error: '不正なロール: ' + role };
+    cache.put(DEBUG_ROLE_CACHE_KEY, role, DEBUG_ROLE_TTL);
+    writeAuditLog_('debug.role_set', email, role);
+    return { success: true, role: role };
+  } catch (err) { return { success: false, error: err.message }; }
+}
+
+function api_getDebugRole() {
+  try { requireAdmin_(); return { role: getDebugRoleOverride_() }; }
+  catch (err) { return { role: null }; }
+}
+
 // wf: getWorkflowById_ が返す形式(creator, collaborators を含む)
 function _isCreatorOrCollaborator_(email, wf) {
   var e = normalizeEmail_(email);

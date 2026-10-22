@@ -16,7 +16,9 @@ function getAdminPage_() {
   tpl.initialLinks = JSON.stringify(getLinkRelations_());
   var _cu = Session.getActiveUser().getEmail();
   tpl.currentUser = _cu;
-  tpl.currentRole = getUserRole_(_cu) || ROLE_OWNER;
+  tpl.currentRole = getEffectiveUserRole_(_cu) || ROLE_OWNER;
+  tpl.realRole = getUserRole_(_cu) || ROLE_OWNER;
+  tpl.debugRoleOverride = getDebugRoleOverride_() || '';
   tpl.appVersion = VERSION;
   tpl.contactEmail = CONTACT_EMAIL;
   tpl.envName = ENV_NAME;
@@ -63,7 +65,7 @@ function getAllWorkflowsForRender_() {
 function _annotateWorkflowsForUser_(list) {
   var email = '';
   try { email = Session.getActiveUser().getEmail() || ''; } catch (e) {}
-  var role = getUserRole_(email) || ROLE_OWNER;
+  var role = getEffectiveUserRole_(email) || ROLE_OWNER;
   var out = [];
   for (var i = 0; i < list.length; i++) {
     var w = list[i];
@@ -118,7 +120,7 @@ function api_restoreWorkflow(wid) {
   var lock = LockService.getScriptLock();
   try {
     var caller = requireAdmin_();
-    if (!canManageAdmins_(getUserRole_(caller))) return { success: false, error: 'この操作はオーナー権限が必要です' };
+    if (!canManageAdmins_(getEffectiveUserRole_(caller))) return { success: false, error: 'この操作はオーナー権限が必要です' };
     if (!lock.tryLock(15000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var st = ss.getSheetByName(SHEET_SETTINGS);
@@ -145,7 +147,7 @@ function api_purgeWorkflow(wid) {
   var lock = LockService.getScriptLock();
   try {
     var caller = requireAdmin_();
-    if (!canManageAdmins_(getUserRole_(caller))) return { success: false, error: 'この操作はオーナー権限が必要です' };
+    if (!canManageAdmins_(getEffectiveUserRole_(caller))) return { success: false, error: 'この操作はオーナー権限が必要です' };
     if (!lock.tryLock(30000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var st = ss.getSheetByName(SHEET_SETTINGS);
@@ -358,7 +360,7 @@ function api_saveWorkflow(data) {
   var lock = LockService.getScriptLock();
   try {
     var caller = requireAdmin_();
-    var callerRole = getUserRole_(caller);
+    var callerRole = getEffectiveUserRole_(caller);
     var nameErr = validateWorkflowName_(data && data.name);
     if (nameErr) return { success: false, error: nameErr };
     var approverErr = validateEmailList_(data.approvers);
@@ -542,33 +544,44 @@ function api_saveWorkflow(data) {
     writeAuditLog_(isNew ? 'workflow.create' : 'workflow.update', 'wid=' + wid, data.name + ' [' + describeFieldDiff_(diff) + ']');
     invalidateRenderCache_();
 
-    // 保存直後にヘルスチェック: Bot 参加状態と外部シート書込権限を検証し、
-    // 問題があれば warnings として返す(サイレント失敗の事前検知)。
+    // 以前はここで Bot 参加状態 + 外部シート書込権限を同期チェックして warnings を返していたが、
+    // 実行スペースが多いワークフローでは数秒~十数秒要してレスポンスが遅かったため非同期化した。
+    // クライアントは保存完了後に api_verifyWorkflowSetup(wid) を別途呼び、必要なら警告モーダルを出す。
+    return { success: true, id: wid, diff: describeFieldDiff_(diff), warnings: [] };
+  } catch (err) { Logger.log('api_saveWorkflow エラー: ' + err.message); try { notifyAdminOnError_(err, 'api_saveWorkflow'); } catch (e2) {} return { success: false, error: err.message }; }
+  finally { try { lock.releaseLock(); } catch (e) {} }
+}
+
+// 保存後にクライアントが非同期で呼び、Bot参加状態や外部シート接続性を検証して警告を返す。
+// 保存クリティカルパスから外すために分離した。
+function api_verifyWorkflowSetup(wid) {
+  try {
+    requireAdmin_();
+    var wf = getWorkflowById_(wid);
+    if (!wf) return { warnings: [] };
     var warnings = [];
     try {
-      if (data.targetSpace) {
-        var vt = verifyBotAccess_(data.targetSpace);
+      if (wf.targetSpace) {
+        var vt = verifyBotAccess_(wf.targetSpace);
         if (!vt.ok) warnings.push('送信先スペースに Bot が参加していません: ' + vt.error);
       }
-      if (data.execSpace) {
-        var execList = String(data.execSpace).split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+      if (wf.execSpace) {
+        var execList = String(wf.execSpace).split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
         execList.forEach(function(sid){
-          if (sid === data.targetSpace) return;
+          if (sid === wf.targetSpace) return;
           var ve = verifyBotAccess_(sid);
           if (!ve.ok) warnings.push('実行スペース(' + sid + ')に Bot が参加していません: ' + ve.error);
         });
       }
     } catch (e) { warnings.push('スペース参加状態の確認に失敗: ' + e.message); }
-    if (data.externalSheet) {
+    if (wf.externalSheet) {
       try {
-        var eidChk = String(data.externalSheet).match(/\/d\/([a-zA-Z0-9_-]+)/);
-        if (eidChk) SpreadsheetApp.openById(eidChk[1]).getSheets().length; // 開けなければ例外
+        var eidChk = String(wf.externalSheet).match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (eidChk) SpreadsheetApp.openById(eidChk[1]).getSheets().length;
       } catch (e) { warnings.push('外部スプレッドシートを開けません(共有権限/URL 確認): ' + e.message); }
     }
-
-    return { success: true, id: wid, diff: describeFieldDiff_(diff), warnings: warnings };
-  } catch (err) { Logger.log('api_saveWorkflow エラー: ' + err.message); try { notifyAdminOnError_(err, 'api_saveWorkflow'); } catch (e2) {} return { success: false, error: err.message }; }
-  finally { try { lock.releaseLock(); } catch (e) {} }
+    return { warnings: warnings };
+  } catch (err) { return { warnings: [], error: err.message }; }
 }
 
 // UI が保存前に差分を確認するために呼ぶ。実際の変更は行わない。
@@ -602,7 +615,7 @@ function api_deleteWorkflow(wid) {
   var lock = LockService.getScriptLock();
   try {
     var caller = requireAdmin_();
-    var callerRole = getUserRole_(caller);
+    var callerRole = getEffectiveUserRole_(caller);
     var wfChk = getWorkflowById_(wid);
     if (wfChk && !canDeleteWorkflow_(caller, wfChk, callerRole)) return { success: false, error: 'このワークフローを削除する権限がありません' };
     if (!lock.tryLock(30000)) return { success: false, error: '他の管理操作が進行中です。10秒ほど待ってから再度お試しください。' };
@@ -631,7 +644,7 @@ function api_deleteWorkflow(wid) {
 function api_toggleStatus(wid) {
   try {
     var caller = requireAdmin_();
-    var callerRole = getUserRole_(caller);
+    var callerRole = getEffectiveUserRole_(caller);
     var wfChk = getWorkflowById_(wid);
     if (wfChk && !canEditWorkflow_(caller, wfChk, callerRole)) return { success: false, error: 'このワークフローの有効/無効を切り替える権限がありません' };
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -648,7 +661,7 @@ function api_toggleStatus(wid) {
 function api_saveAdmins(admins) {
   try {
     var caller = requireAdmin_();
-    var callerRole = getUserRole_(caller);
+    var callerRole = getEffectiveUserRole_(caller);
     if (!canManageAdmins_(callerRole)) return { success: false, error: 'この操作はオーナー権限が必要です' };
     if (!admins || !Array.isArray(admins) || admins.length === 0) return { success: false, error: '管理者を1人以上指定してください' };
     var cleaned = admins.map(function(a) {
