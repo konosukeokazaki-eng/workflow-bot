@@ -17,8 +17,6 @@ function getAdminPage_() {
   var _cu = Session.getActiveUser().getEmail();
   tpl.currentUser = _cu;
   tpl.currentRole = getEffectiveUserRole_(_cu) || ROLE_OWNER;
-  tpl.realRole = getUserRole_(_cu) || ROLE_OWNER;
-  tpl.debugRoleOverride = getDebugRoleOverride_() || '';
   tpl.appVersion = VERSION;
   tpl.contactEmail = CONTACT_EMAIL;
   tpl.envName = ENV_NAME;

@@ -137,6 +137,14 @@ function api_getDebugRole() {
   catch (err) { return { role: null }; }
 }
 
+// Apps Script エディタから直接実行する用のショートカット。
+// 使い方: エディタで関数ドロップダウンから選択→実行(初回のみ承認プロンプト)。
+// 実行者(=エディタを開いているオーナー)の UserCache に保存される。
+function debugAsEditor() { var r = api_setDebugRole(ROLE_EDITOR); Logger.log(JSON.stringify(r)); return r; }
+function debugAsMember() { var r = api_setDebugRole(ROLE_MEMBER); Logger.log(JSON.stringify(r)); return r; }
+function debugAsOwner()  { var r = api_setDebugRole(ROLE_OWNER);  Logger.log(JSON.stringify(r)); return r; }
+function debugRoleStatus() { Logger.log('override=' + (getDebugRoleOverride_() || '(none)')); return getDebugRoleOverride_(); }
+
 // wf: getWorkflowById_ が返す形式(creator, collaborators を含む)
 function _isCreatorOrCollaborator_(email, wf) {
   var e = normalizeEmail_(email);

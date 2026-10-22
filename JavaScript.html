@@ -19,8 +19,6 @@ window.onload=function(){
   try{workflows=__initialData||[];}catch(e){}
   try{admins=__initialAdmins||[];_normalizeAdmins();}catch(e){}
   try{linkRelations=__initialLinks||[];}catch(e){}
-  // デバッグロール選択の初期化(オーナー専用UI)
-  try{var ds=document.getElementById('debugRoleSelect');if(ds&&typeof __debugRoleOverride!=='undefined')ds.value=__debugRoleOverride||'';}catch(e){}
   renderList();
   spacesLoading=true;
   google.script.run.withSuccessHandler(function(d){spaces=d||[];spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).withFailureHandler(function(){spacesLoading=false;if(document.getElementById('wfExecSpace'))renderEditor();}).api_getSpaces();
@@ -47,17 +45,6 @@ function showPrivacyModal(){
 function acceptPrivacy(){
   showLoading('記録中...');
   google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){document.querySelector('.modal-overlay').remove();showToast('ご同意ありがとうございます');}else{showToast('エラー: '+(r.error||''));}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_recordPrivacyAcceptance();
-}
-// デバッグ用: 自分の表示上のロールを一時的に editor/member に切り替えて UI/権限挙動を検証する。
-// サーバ側で UserCache に保存され、api_* の権限判定もオーバーライド値に従う(実権限は owner のまま)。
-function setDebugRole(role){
-  if(isDirty&&!confirm('未保存の変更があります。破棄してロールを切り替えますか？'))return;
-  showLoading('ロール切替中...');
-  google.script.run.withSuccessHandler(function(r){
-    hideLoading();
-    if(r&&r.success){ location.reload(); }
-    else{ showToast('エラー: '+(r&&r.error||'')); }
-  }).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_setDebugRole(role);
 }
 window.onbeforeunload=function(){if(isDirty)return '未保存の変更があります。ページを離れますか？';};
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){var ov=document.querySelector('.modal-overlay');if(ov)ov.remove();}});
