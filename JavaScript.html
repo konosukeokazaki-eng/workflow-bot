@@ -77,7 +77,8 @@ function renderList(){
       if(childSet[wf.id])return; // 子は親の下にのみ表示
       items.push(_renderWfItem(wf,false,null));
       // 選択されている親なら、その連動子WFをインデント表示
-      if(wf.id===currentWfId && childrenOf[wf.id] && childrenOf[wf.id].length){
+      var isExpanded=wf.id===currentWfId || (childrenOf[wf.id]||[]).some(function(r){return r.child===currentWfId;});
+      if(isExpanded && childrenOf[wf.id] && childrenOf[wf.id].length){
         childrenOf[wf.id].forEach(function(rel){
           var cwf=wfById[rel.child];
           if(!cwf)return;
