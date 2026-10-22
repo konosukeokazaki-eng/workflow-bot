@@ -320,4 +320,19 @@ body.help-only .modal-overlay .actions { display:none; }
 @keyframes itemSlideIn { from { opacity:0; transform:translateX(-8px); } to { opacity:1; transform:translateX(0); } }
 @keyframes slideDown { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:translateY(0); } }
 @keyframes shake { 0%,100% { transform:translateX(0); } 20%,60% { transform:translateX(-4px); } 40%,80% { transform:translateX(4px); } }
+
+/* 連動ワークフロー: 逆引きバナー */
+.parent-banner { background:#eef4ff; border:1px solid #c2d7ff; border-radius:8px; padding:10px 12px; margin:0 0 14px; font-size:12px; color:var(--c-text); }
+.parent-chip-row { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.parent-chip { display:inline-flex; align-items:center; gap:4px; background:#fff; border:1px solid #c2d7ff; border-radius:14px; padding:4px 10px; font-size:12px; cursor:pointer; transition:background .15s; }
+.parent-chip:hover { background:#f3f7ff; }
+.parent-chip-mode { background:#eef4ff; color:var(--c-primary); padding:1px 6px; border-radius:8px; font-size:11px; margin-left:4px; }
+
+/* 連動ワークフロー: モーダル内 ラジオカード */
+.radio-card { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; border:1px solid var(--c-border); border-radius:8px; margin:6px 0; cursor:pointer; transition:background .15s,border-color .15s; }
+.radio-card:hover { background:#f8f9fc; }
+.radio-card input[type=radio] { margin-top:3px; }
+.radio-card:has(input:checked) { border-color:var(--c-primary); background:#eef4ff; }
+.radio-card-title { font-weight:600; font-size:13px; }
+.radio-card-desc { font-size:11px; color:var(--c-text-muted); margin-top:4px; line-height:1.5; }
 </style>

@@ -188,8 +188,29 @@ function api_getButtons(wid) {
 }
 
 function api_getWorkflowDetail(wid) {
-  try { requireAdmin_(); return { fields: getWorkflowFields_(wid), buttons: getWorkflowButtons_(wid) }; }
-  catch (err) { recordDataError_('api_getWorkflowDetail', err); return { fields: [], buttons: [] }; }
+  try { requireAdmin_(); return { fields: getWorkflowFields_(wid), buttons: getWorkflowButtons_(wid), parents: findLaunchParents_(wid) }; }
+  catch (err) { recordDataError_('api_getWorkflowDetail', err); return { fields: [], buttons: [], parents: [] }; }
+}
+
+// 指定WF ID を launch ボタンから参照している親 WF を全て返す。
+// 戻り値: [{ wfId, wfName, buttonName, inheritThread }]
+function findLaunchParents_(childWid) {
+  try {
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var bt = ss.getSheetByName(SHEET_BUTTONS);
+    if (!bt || bt.getLastRow() < 2) return [];
+    var lastCol = Math.max(12, bt.getLastColumn());
+    var data = bt.getRange(2, 1, bt.getLastRow() - 1, lastCol).getValues();
+    var parents = [];
+    var truthy = function(v) { return v === true || v === 'TRUE' || v === 'true'; };
+    data.forEach(function(r) {
+      if (String(r[9] || '').trim() === 'launch' && Number(r[10]) === Number(childWid)) {
+        var parentWf = getWorkflowById_(r[0]);
+        if (parentWf) parents.push({ wfId: r[0], wfName: parentWf.name, buttonName: r[1], inheritThread: truthy(r[11]) });
+      }
+    });
+    return parents;
+  } catch (err) { recordDataError_('findLaunchParents_', err); return []; }
 }
 
 function api_getSpaces() {

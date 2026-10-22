@@ -2,7 +2,7 @@
 /* ============================================================
    State
    ============================================================ */
-var workflows=[], currentWfId=null, currentFields=[], currentButtons=[], spaces=[], spacesLoading=true, admins=[];
+var workflows=[], currentWfId=null, currentFields=[], currentButtons=[], currentParents=[], spaces=[], spacesLoading=true, admins=[];
 var isDirty=false;
 var wfEditorTab='basic';
 var COLORS={green:'#34a853',blue:'#1a73e8',yellow:'#f9ab00',orange:'#e65100',red:'#c62828',gray:'#888'};
@@ -69,11 +69,11 @@ function toggleWf(id){run('api_toggleStatus',id,function(r){if(r.success){var w=
 function selectWf(id){
   if(isDirty&&!confirm('未保存の変更があります。破棄しますか？'))return;
   isDirty=false;currentWfId=id;wfEditorTab='basic';renderList();
-  run('api_getWorkflowDetail',id,function(d){currentFields=d.fields||[];currentButtons=d.buttons||[];renderEditor();});
+  run('api_getWorkflowDetail',id,function(d){currentFields=d.fields||[];currentButtons=d.buttons||[];currentParents=d.parents||[];renderEditor();});
 }
 function createNew(){
   if(isDirty&&!confirm('未保存の変更があります。破棄しますか？'))return;
-  isDirty=false;currentWfId=null;currentFields=[];currentButtons=[];wfEditorTab='basic';renderEditor();
+  isDirty=false;currentWfId=null;currentFields=[];currentButtons=[];currentParents=[];wfEditorTab='basic';renderEditor();
 }
 
 /* ============================================================
@@ -106,6 +106,17 @@ function renderEditor(){
   var left='<div class="panel"><h2>'+(wf?esc(wf.name):'新規ワークフロー');
   if(wf){var _acts='<div style="display:flex;gap:5px">';if(wf.canEdit!==false)_acts+='<button class="btn btn-sm" onclick="deployButton()" style="background:#e8f0fe;color:var(--c-primary)">設置</button>';if(wf.canDelete!==false)_acts+='<button class="btn btn-sm btn-danger" onclick="deleteWf()">削除</button>';_acts+='</div>';left+=_acts;}
   left+='</h2>';
+  // 逆引き: このワークフローを launch ボタンから起動している親WFの一覧を表示
+  if(wf && currentParents && currentParents.length){
+    var inheritTags = currentParents.map(function(p){
+      return '<span class="parent-chip" title="クリックで親ワークフローを開く" onclick="selectWorkflow('+p.wfId+')">'
+        +'<span class="mi" style="font-size:14px;vertical-align:middle">arrow_back</span> '
+        +esc(p.wfName)+' <span style="color:var(--c-text-muted)">の「'+esc(p.buttonName)+'」ボタン</span>'
+        +(p.inheritThread?' <span class="parent-chip-mode">同一スレッド</span>':' <span class="parent-chip-mode">新規投稿</span>')
+        +'</span>';
+    }).join('');
+    left+='<div class="parent-banner"><span class="mi" style="font-size:16px;color:var(--c-primary);vertical-align:middle">hub</span> このワークフローは次の場所から起動されます：<div class="parent-chip-row">'+inheritTags+'</div></div>';
+  }
   // Chip nav
   left+='<div class="chip-nav">'
     +'<button class="chip'+(tab==='basic'?' active':'')+'" onclick="setWfTab(\'basic\')"><span class="chip-num">1</span>基本情報<span class="chip-error-dot" id="dotBasic" style="display:none"></span></button>'
@@ -196,7 +207,7 @@ function renderButtons(){
     var sub;
     if(b.type==='launch'){
       var tgt=(workflows||[]).filter(function(w){return w.id===Number(b.linkedWorkflowId);})[0];
-      sub='→ 起動: 「'+esc(tgt?tgt.name:'(未設定)')+'」'+(b.inheritThread?' ・同じスレッド':'');
+      sub='<span class="mi" style="font-size:14px;vertical-align:middle">hub</span> 「'+esc(tgt?tgt.name:'(未設定)')+'」を起動 ・'+(b.inheritThread?'同じスレッドに続ける':'新規メッセージとして投稿');
     }else{
       sub='→ 「'+esc(b.status)+'」'+(b.threadReply?' ・<span class="mi" style="font-size:14px">reply</span> 返信':'');
     }
@@ -305,9 +316,12 @@ function showButtonModal(idx){
       +'<div style="margin-top:6px;font-size:10px;color:var(--c-text-faint)">変数: {申請者} {ステータス} {ワークフロー}</div>'
     +'</div>'
     +'<div id="bLaunchSec" style="'+(b.type==='launch'?'':'display:none')+';padding:10px;border:1px solid var(--c-border);border-radius:8px;margin-bottom:8px">'
-      +'<div class="form-group"><label>起動するワークフロー</label><select id="bLinkedWf">'+(wfOptions||'<option value="">(他のワークフローがありません)</option>')+'</select><div class="error-msg" id="errBLinked">起動するワークフローを選択してください</div></div>'
-      +'<div class="checkbox-row"><input type="checkbox" id="bInherit"'+(b.inheritThread?' checked':'')+'><label for="bInherit">起動したワークフローの送信カードを同じスレッドに投稿する</label></div>'
-      +'<div style="margin-top:6px;font-size:10px;color:var(--c-text-faint)">連鎖は最大3階層までです（それ以上は投稿されません）。</div>'
+      +'<div class="form-group"><label>起動するワークフロー</label><select id="bLinkedWf">'+(wfOptions||'<option value="">(他のワークフローがありません)</option>')+'</select><div class="error-msg" id="errBLinked">起動するワークフローを選択してください</div><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">※事前に起動先のワークフローを作成しておいてください。</div></div>'
+      +'<div class="form-group"><label>起動したワークフローの投稿先</label>'
+      +'<label class="radio-card"><input type="radio" name="bInheritMode" value="thread"'+(b.inheritThread?' checked':'')+'><div class="radio-card-body"><div class="radio-card-title">同じスレッドに続けて投稿する</div><div class="radio-card-desc">このボタンが押された承認カードの返信として投稿されます。<br>例：「購入申請」承認 → 同じスレッドで「発注依頼」のカードが続く</div></div></label>'
+      +'<label class="radio-card"><input type="radio" name="bInheritMode" value="new"'+(!b.inheritThread?' checked':'')+'><div class="radio-card-body"><div class="radio-card-title">別のメッセージとして投稿する</div><div class="radio-card-desc">起動したワークフロー自身の送信先スペースに新規メッセージとして投稿されます。<br>例：承認を機に別部署スペースへ独立した依頼を飛ばす</div></div></label>'
+      +'</div>'
+      +'<div class="help-note" style="font-size:11px;margin-top:8px">このボタンを押しても親ワークフローのステータスは変わりません（ステータス更新したい場合は別途「ステータスを設定」ボタンを並べて配置してください）。連鎖は最大3階層までです。</div>'
     +'</div>'
     +'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="saveButton('+idx+')">保存</button></div>'
     +'</div>';
@@ -334,7 +348,8 @@ function saveButton(idx){
   }else{
     var lid=document.getElementById('bLinkedWf').value;
     if(!lid){showError('errBLinked');ok=false;}else hideError('errBLinked');
-    b.linkedWorkflowId=Number(lid||0);b.inheritThread=document.getElementById('bInherit').checked;
+    var modeEl=document.querySelector('input[name=bInheritMode]:checked');
+    b.linkedWorkflowId=Number(lid||0);b.inheritThread=modeEl?modeEl.value==='thread':false;
     b.status='';b.threadReply=false;b.replyMsg='';
   }
   if(!ok)return;
@@ -390,7 +405,7 @@ function doSaveWorkflow(data){
     currentWfId=r.id;
     // 保存後、フィールドの fieldId をサーバから再取得(次回編集時の差分計算に必要)
     run('api_getWorkflowDetail',r.id,function(d){
-      currentFields=d.fields||[];currentButtons=d.buttons||[];
+      currentFields=d.fields||[];currentButtons=d.buttons||[];currentParents=d.parents||[];
       showToast('保存しました'+(r.diff?' ('+r.diff+')':''));
       // Bot 未参加や外部シート書込不可などの警告があればモーダルで通知(サイレント失敗の事前予防)
       if(r.warnings && r.warnings.length){ showSaveWarnings(r.warnings); }
