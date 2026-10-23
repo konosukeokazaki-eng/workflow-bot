@@ -376,21 +376,45 @@ function handleApproval_(e) {
     var btn = buttons[btnIndex];
     if (!btn) return htmlPage_('🚫', '無効なボタン', '', '#666');
     var incomingChain = parseInt(e.parameter.chain || '1', 10);
-    // 連動起動タイプ: ステータス更新は行わず、親スレッドに次ワークフロー起動カードを投稿する
+    // 連動起動タイプ: 親スレッドに次ワークフロー起動カードを投稿し、btn.status が設定されていれば親ステータスも更新する
     if (btn.type === 'launch') {
       if (incomingChain >= 3) return htmlPage_('⚠️', '連鎖上限', '3階層までの連鎖に制限されています', '#666');
       if (!btn.linkedWorkflowId) return htmlPage_('⚠️', 'エラー', '連動先ワークフローが未設定です', '#666');
       var linkedWf = getWorkflowById_(btn.linkedWorkflowId);
       if (!linkedWf) return htmlPage_('⚠️', 'エラー', '起動対象ワークフローが見つかりません', '#666');
+      if (!lock.tryLock(15000)) return htmlPage_('⏳', '混雑中', '他の承認処理が進行中です。10秒ほど待ってからもう一度お試しください', '#666');
       var ssL = SpreadsheetApp.openById(SPREADSHEET_ID);
       var sheetL = ssL.getSheetByName(wf.name);
       if (!sheetL) return htmlPage_('⚠️', 'エラー', 'データシートが見つかりません', '#666');
+      try { ensureDataSheetSchema_(sheetL, wf.type === '申請・承認'); } catch (eS) { Logger.log('ensureDataSheetSchema_ skip (launch): ' + eS.message); }
       var headersL = sheetL.getRange(1, 1, 1, sheetL.getLastColumn()).getValues()[0];
-      var msgColL = -1;
-      for (var ci = 0; ci < headersL.length; ci++) if (headersL[ci] === 'メッセージ名') { msgColL = ci + 1; break; }
+      var msgColL = -1, statusColL = -1;
+      for (var ci = 0; ci < headersL.length; ci++) {
+        if (headersL[ci] === 'メッセージ名') msgColL = ci + 1;
+        if (headersL[ci] === 'ステータス') statusColL = ci + 1;
+      }
       var parentMsg = msgColL > 0 ? sheetL.getRange(rowIndex, msgColL).getValue() : '';
-      postLauncherToThread_(linkedWf, parentMsg, btn.inheritThread, incomingChain + 1, applicantName, wf.id, rowIndex, btn.status || '');
-      writeAuditLog_('approval.launch', 'wid=' + workflowId + ' row=' + rowIndex, 'linked=' + btn.linkedWorkflowId);
+      var launchStatus = btn.status || '';
+      // btn.status が設定されている場合のみ、親の承認状態を更新する
+      if (launchStatus && statusColL > 0) {
+        var currentStatusL = sheetL.getRange(rowIndex, statusColL).getValue();
+        if (currentStatusL !== '承認待ち') return htmlPage_('⚠️', '処理済み', 'この申請は既に「' + currentStatusL + '」されています', '#666');
+        var rawEmailL = '';
+        try { rawEmailL = Session.getActiveUser().getEmail() || ''; } catch (eA2) { Logger.log('getActiveUser throw (launch): ' + eA2.message); }
+        var currentUserL = normalizeEmail_(rawEmailL);
+        var approverListL = String(wf.approvers || '').split(',').map(function(a) { return normalizeEmail_(a); }).filter(function(a) { return a; });
+        if (!currentUserL) return htmlPage_('🚫', '権限がありません', 'ログイン情報を取得できませんでした。別アカウントでGoogleにログイン中の可能性があります。', '#666');
+        if (approverListL.length === 0) return htmlPage_('🚫', '承認者未設定', 'このワークフローには承認者が設定されていません。管理画面で承認者を追加してください。', '#666');
+        if (approverListL.indexOf(currentUserL) === -1) return htmlPage_('🚫', '権限がありません', 'このワークフローの承認者ではありません(' + currentUserL + ')', '#666');
+        sheetL.getRange(rowIndex, statusColL).setValue(launchStatus);
+        SpreadsheetApp.flush();
+        updateExternalSheet_(wf, wf.name, rowIndex, statusColL, launchStatus);
+        var emojiL = { green: '✅', blue: '🔵', yellow: '🟡', orange: '🟠', red: '❌', gray: '⚫' }[btn.color] || '⚪';
+        var fieldsL = getWorkflowFields_(workflowId);
+        if (parentMsg) updateApprovalCard_(wf, fieldsL, sheetL, rowIndex, parentMsg, applicantName, launchStatus, emojiL, headersL);
+      }
+      postLauncherToThread_(linkedWf, parentMsg, btn.inheritThread, incomingChain + 1, applicantName, wf.id, rowIndex, launchStatus);
+      writeAuditLog_('approval.launch', 'wid=' + workflowId + ' row=' + rowIndex, 'linked=' + btn.linkedWorkflowId + ' status=' + launchStatus);
       return htmlPage_('🚀', '起動しました', '次のワークフロー「' + linkedWf.name + '」をスレッドに投稿しました', '#1a73e8');
     }
     var newStatus = btn.status;
