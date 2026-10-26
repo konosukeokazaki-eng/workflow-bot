@@ -272,7 +272,7 @@ function api_getSpaces() {
 // 結果は CacheService に 1 時間キャッシュする。
 function api_getSpaceMembers(spaceId) {
   try {
-    requireAdmin_();
+    var caller = requireAdmin_();
     if (!spaceId) return [];
     var cache = CacheService.getScriptCache();
     var cacheKey = 'space_members_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, spaceId)).substring(0, 24);
@@ -322,19 +322,31 @@ function api_getSpaceMembers(spaceId) {
         }
       } catch (e) { Logger.log('people.batchGet 失敗: ' + e.message); }
     }
-    // People API で取れなかったユーザーは Admin Directory API でフォールバック(directory.readonly スコープを利用)
+    // People API で取れなかったユーザーは Admin Directory API でフォールバック。
+    // スペース一覧取得と同じ DWD impersonation 経由にすることで、デプロイ者が
+    // Workspace 管理者でなくても admin.directory.user.readonly スコープで解決できるようにする。
     var missing = members.filter(function(m) { return !m.email; });
-    for (var k = 0; k < missing.length; k++) {
-      try {
-        var dr = UrlFetchApp.fetch('https://admin.googleapis.com/admin/directory/v1/users/' + encodeURIComponent(missing[k].userId) + '?projection=basic&viewType=domain_public', { method: 'get', headers: { 'Authorization': 'Bearer ' + userToken }, muteHttpExceptions: true });
-        if (dr.getResponseCode() < 400) {
-          var du = JSON.parse(dr.getContentText());
-          if (du.primaryEmail) {
-            for (var jj = 0; jj < members.length; jj++) { if (members[jj].userId === missing[k].userId) { members[jj].email = du.primaryEmail; break; } }
+    if (missing.length > 0) {
+      var adminToken = null;
+      try { adminToken = getImpersonatedToken_(caller, 'https://www.googleapis.com/auth/admin.directory.user.readonly'); }
+      catch (impErr) { Logger.log('directory impersonate 失敗(デプロイ者トークンにフォールバック): ' + impErr.message); adminToken = userToken; }
+      for (var k = 0; k < missing.length; k++) {
+        try {
+          var dr = UrlFetchApp.fetch('https://admin.googleapis.com/admin/directory/v1/users/' + encodeURIComponent(missing[k].userId) + '?projection=basic&viewType=domain_public', { method: 'get', headers: { 'Authorization': 'Bearer ' + adminToken }, muteHttpExceptions: true });
+          var drc = dr.getResponseCode();
+          if (drc < 400) {
+            var du = JSON.parse(dr.getContentText());
+            if (du.primaryEmail) {
+              for (var jj = 0; jj < members.length; jj++) { if (members[jj].userId === missing[k].userId) { members[jj].email = du.primaryEmail; break; } }
+            }
+          } else {
+            Logger.log('directory.users.get HTTP ' + drc + ' uid=' + missing[k].userId + ' body=' + dr.getContentText().substring(0, 200));
           }
-        }
-      } catch (e2) { Logger.log('directory.users.get 失敗: ' + missing[k].userId + ' ' + e2.message); }
+        } catch (e2) { Logger.log('directory.users.get 例外: ' + missing[k].userId + ' ' + e2.message); }
+      }
     }
+    var stillMissing = members.filter(function(m) { return !m.email; }).length;
+    if (stillMissing > 0) Logger.log('api_getSpaceMembers: email未解決 ' + stillMissing + '/' + members.length + '名 space=' + spaceId);
 
     // 名前で並び替え
     members.sort(function(a, b) { return (a.displayName || '').localeCompare(b.displayName || '', 'ja'); });
