@@ -528,7 +528,9 @@ function updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicant
   fields.forEach(function(f) {
     var col = -1;
     for (var c = 0; c < headers.length; c++) { if (headers[c] === f.name) { col = c + 1; break; } }
-    widgets.push({ decoratedText: { topLabel: f.name, text: String(col > 0 ? sheet.getRange(rowIndex, col).getValue() : '') || '(なし)', wrapText: true } });
+    var raw = col > 0 ? sheet.getRange(rowIndex, col).getValue() : '';
+    var disp = (raw instanceof Date) ? Utilities.formatDate(raw, 'Asia/Tokyo', 'yyyy/MM/dd') : String(raw);
+    widgets.push({ decoratedText: { topLabel: f.name, text: disp || '(なし)', wrapText: true } });
   });
   widgets.push({ decoratedText: { topLabel: 'ステータス', text: emoji + ' ' + newStatus } });
   try {
