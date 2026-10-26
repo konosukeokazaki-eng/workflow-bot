@@ -44,7 +44,13 @@ function openWorkflowDialog_(event) {
         if (pds) {
           var phdrs = pds.getRange(1, 1, 1, pds.getLastColumn()).getValues()[0];
           for (var pi = 0; pi < phdrs.length; pi++) {
-            if (phdrs[pi] === 'メッセージ名') { inheritFrom = pds.getRange(parseInt(parentRow, 10), pi + 1).getValue() || ''; break; }
+            if (phdrs[pi] === 'メッセージ名') {
+              // 親WFが複数スペースに投稿されている場合はカンマ区切りなので先頭を採用。
+              // 通常は postLauncherToThread_ 経由で単一の parentMessageName が inheritFrom として渡ってくるのでこの経路は保険。
+              var _rawMsg = String(pds.getRange(parseInt(parentRow, 10), pi + 1).getValue() || '');
+              inheritFrom = _rawMsg.split(',')[0].trim();
+              break;
+            }
           }
         }
       }
@@ -233,9 +239,11 @@ function handleSubmitWorkflow_(event) {
     var rowIndex = dataSheet.getLastRow();
     var headers = headerRow.slice();
     writeToExternalSheet_(wf, { headers: headers, values: row.slice(0, msgIdx >= 0 ? msgIdx : row.length) });
-    var destSpace = wf.targetSpace || currentSpace;
-    if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, chain, inheritFrom);
-    else sendInfoCard_(wf, fields, values, senderName, destSpace, inheritFrom);
+    // 送信先スペースはカンマ区切り複数対応。空欄なら実行スペース(ボタンが押されたスペース)にフォールバック。
+    var destSpaces = parseSpaceIds_(wf.targetSpace);
+    if (destSpaces.length === 0 && currentSpace) destSpaces = [currentSpace];
+    if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces, chain, inheritFrom);
+    else sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom);
     // 連動元(親)ワークフローのステータスを更新する。親カードもあわせて再描画する。
     if (parentInfo && parentInfo.parentStatus) {
       try { updateParentStatus_(parentInfo.parentWorkflowId, parentInfo.parentRow, parentInfo.parentStatus); }
@@ -247,7 +255,10 @@ function handleSubmitWorkflow_(event) {
   }
 }
 
-function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, chain, inheritFrom) {
+function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces, chain, inheritFrom) {
+  // 後方互換: 旧シグネチャ(destSpace=string)で呼ばれても動くよう正規化。
+  if (typeof destSpaces === 'string') destSpaces = parseSpaceIds_(destSpaces);
+  if (!destSpaces || !destSpaces.length) destSpaces = parseSpaceIds_(wf.targetSpace);
   var widgets = [];
   widgets.push({ decoratedText: { topLabel: '送信者', text: senderName } });
   fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)', wrapText: true } }); });
@@ -286,49 +297,71 @@ function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpace, 
   }
   try {
     var token = getServiceAccountToken_();
-    var payload = { cardsV2: [{ cardId: 'approval_' + wf.id + '_' + rowIndex, card: { header: { title: '🔔 新しい申請', subtitle: wf.name + ' - ' + senderName }, sections: [{ header: '申請内容', widgets: widgets }] } }] };
-    if (mentionText) payload.text = mentionText;
-    var sendTo = destSpace || wf.targetSpace;
-    var urlSuffix = '';
+    // スレッド継承ON時は親メッセージのスペースにのみ投稿する(他スペースではスレッドが存在しない)。
+    // それ以外は destSpaces 全てに同一カードを投稿し、全メッセージIDをカンマ区切りで保存する。
+    var targets = [];
     if (inheritFrom) {
       var parentSpace = String(inheritFrom).split('/messages/')[0];
-      if (parentSpace) sendTo = parentSpace;
       var parentMsgId = String(inheritFrom).split('/').pop().split('.')[0];
-      payload.thread = { name: parentSpace + '/threads/' + parentMsgId };
-      urlSuffix = '?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD';
+      if (!parentSpace) throw new Error('inheritFrom から親スペースを特定できません');
+      targets.push({ space: parentSpace, thread: parentSpace + '/threads/' + parentMsgId });
+    } else {
+      if (!destSpaces || !destSpaces.length) throw new Error('送信先スペースが特定できません');
+      destSpaces.forEach(function(sp){ targets.push({ space: sp, thread: '' }); });
     }
-    if (!sendTo) throw new Error('送信先スペースが特定できません');
-    var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sendTo + '/messages' + urlSuffix, { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
-    Logger.log('sendApprovalCard inheritFrom=' + inheritFrom + ' sendTo=' + sendTo + ' threadName=' + (payload.thread && payload.thread.name) + ' http=' + resp.getResponseCode());
-    var result = JSON.parse(resp.getContentText());
-    if (result.name) {
+    var postedNames = [];
+    targets.forEach(function(t) {
+      try {
+        var payload = { cardsV2: [{ cardId: 'approval_' + wf.id + '_' + rowIndex, card: { header: { title: '🔔 新しい申請', subtitle: wf.name + ' - ' + senderName }, sections: [{ header: '申請内容', widgets: widgets }] } }] };
+        if (mentionText) payload.text = mentionText;
+        var urlSuffix = '';
+        if (t.thread) { payload.thread = { name: t.thread }; urlSuffix = '?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD'; }
+        var resp = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + t.space + '/messages' + urlSuffix, { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+        Logger.log('sendApprovalCard inheritFrom=' + inheritFrom + ' sendTo=' + t.space + ' thread=' + t.thread + ' http=' + resp.getResponseCode());
+        var result = JSON.parse(resp.getContentText());
+        if (result.name) postedNames.push(result.name);
+        else Logger.log('sendApprovalCard: 投稿失敗 space=' + t.space + ' body=' + resp.getContentText().substring(0, 300));
+      } catch (ePost) { Logger.log('sendApprovalCard 個別送信エラー space=' + t.space + ': ' + ePost.message); }
+    });
+    if (postedNames.length) {
       var ds2 = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(wf.name);
       var hdrs2 = ds2.getRange(1, 1, 1, ds2.getLastColumn()).getValues()[0];
       var mcol = -1;
       for (var hi2 = 0; hi2 < hdrs2.length; hi2++) if (hdrs2[hi2] === 'メッセージ名') { mcol = hi2 + 1; break; }
-      if (mcol > 0) ds2.getRange(rowIndex, mcol).setValue(result.name);
+      // 複数投稿時はカンマ区切りで保存(承認時に全カードを更新するため)
+      if (mcol > 0) ds2.getRange(rowIndex, mcol).setValue(postedNames.join(','));
     }
   } catch (err) { Logger.log('カード送信エラー: ' + err.message); }
 }
 
-function sendInfoCard_(wf, fields, values, senderName, destSpace, inheritFrom) {
+function sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom) {
+  // 後方互換: 旧シグネチャ(destSpace=string)で呼ばれても動くよう正規化。
+  if (typeof destSpaces === 'string') destSpaces = parseSpaceIds_(destSpaces);
+  if (!destSpaces || !destSpaces.length) destSpaces = parseSpaceIds_(wf.targetSpace);
   try {
     var widgets = [];
     widgets.push({ decoratedText: { topLabel: '送信者', text: senderName } });
     fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)', wrapText: true } }); });
-    var sendTo = destSpace || wf.targetSpace;
-    var payload = { cardsV2: [{ cardId: 'info_' + wf.id + '_' + Date.now(), card: { header: { title: '📝 ' + wf.name, subtitle: senderName }, sections: [{ widgets: widgets }] } }] };
-    var urlSuffix = '';
+    var token = getServiceAccountToken_();
+    // 定型文はスレッド継承時のみ親スペース、それ以外は全送信先スペースに投稿する。
+    var targets = [];
     if (inheritFrom) {
       var parentSpace = String(inheritFrom).split('/messages/')[0];
-      if (parentSpace) sendTo = parentSpace;
       var parentMsgId = String(inheritFrom).split('/').pop().split('.')[0];
-      payload.thread = { name: parentSpace + '/threads/' + parentMsgId };
-      urlSuffix = '?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD';
+      if (!parentSpace) throw new Error('inheritFrom から親スペースを特定できません');
+      targets.push({ space: parentSpace, thread: parentSpace + '/threads/' + parentMsgId });
+    } else {
+      if (!destSpaces || !destSpaces.length) throw new Error('送信先スペースが特定できません');
+      destSpaces.forEach(function(sp){ targets.push({ space: sp, thread: '' }); });
     }
-    if (!sendTo) throw new Error('送信先スペースが特定できません');
-    var token = getServiceAccountToken_();
-    UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + sendTo + '/messages' + urlSuffix, { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+    targets.forEach(function(t) {
+      try {
+        var payload = { cardsV2: [{ cardId: 'info_' + wf.id + '_' + Date.now(), card: { header: { title: '📝 ' + wf.name, subtitle: senderName }, sections: [{ widgets: widgets }] } }] };
+        var urlSuffix = '';
+        if (t.thread) { payload.thread = { name: t.thread }; urlSuffix = '?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD'; }
+        UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + t.space + '/messages' + urlSuffix, { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+      } catch (ePost) { Logger.log('定型文 個別送信エラー space=' + t.space + ': ' + ePost.message); }
+    });
   } catch (err) { Logger.log('定型文送信エラー: ' + err.message); }
 }
 
@@ -338,25 +371,33 @@ function sendInfoCard_(wf, fields, values, senderName, destSpace, inheritFrom) {
 function postLauncherToThread_(linkedWf, parentMessageName, inheritThread, chain, applicantName, parentWfId, parentRow, parentStatus) {
   try {
     if (!parentMessageName) throw new Error('親メッセージが特定できません');
-    var parentSpace = String(parentMessageName).split('/messages/')[0];
-    var parentMsgId = String(parentMessageName).split('/').pop().split('.')[0];
-    var threadName = parentSpace + '/threads/' + parentMsgId;
-    var params = [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(linkedWf.id) }, { key: 'chain', value: String(chain) }];
-    if (inheritThread) params.push({ key: 'inheritThreadFrom', value: parentMessageName });
-    if (parentWfId && parentRow) {
-      params.push({ key: 'parentWorkflowId', value: String(parentWfId) });
-      params.push({ key: 'parentRow', value: String(parentRow) });
-      if (parentStatus) params.push({ key: 'parentStatus', value: String(parentStatus) });
-    }
-    var card = {
-      header: { title: '🚀 次のワークフロー', subtitle: linkedWf.name },
-      sections: [{ widgets: [
-        { textParagraph: { text: (applicantName || '前のワークフロー') + ' から連動起動されました' } },
-        { buttonList: { buttons: [{ text: '起動', onClick: { action: { function: cardActionFunc_(), parameters: params, interaction: 'OPEN_DIALOG' } } }] } }
-      ] }]
-    };
+    // 親WFが複数スペースに投稿されていた場合は全てのスレッドにランチャーカードを投稿する。
+    var parentMsgs = String(parentMessageName).split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
     var token = getServiceAccountToken_();
-    UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + parentSpace + '/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + linkedWf.id + '_' + Date.now(), card: card }], thread: { name: threadName } }), muteHttpExceptions: true });
+    parentMsgs.forEach(function(pmn) {
+      try {
+        var parentSpace = String(pmn).split('/messages/')[0];
+        var parentMsgId = String(pmn).split('/').pop().split('.')[0];
+        var threadName = parentSpace + '/threads/' + parentMsgId;
+        var params = [{ key: 'actionName', value: 'openWorkflow' }, { key: 'workflowId', value: String(linkedWf.id) }, { key: 'chain', value: String(chain) }];
+        // inheritThread=true のとき、連動先のサブミット時に親スレッドへ返信するため inheritThreadFrom を引き継ぐ。
+        // 各スペースで独立してスレッドが伸びるので、そのスペースの親メッセージ名を使う。
+        if (inheritThread) params.push({ key: 'inheritThreadFrom', value: pmn });
+        if (parentWfId && parentRow) {
+          params.push({ key: 'parentWorkflowId', value: String(parentWfId) });
+          params.push({ key: 'parentRow', value: String(parentRow) });
+          if (parentStatus) params.push({ key: 'parentStatus', value: String(parentStatus) });
+        }
+        var card = {
+          header: { title: '🚀 次のワークフロー', subtitle: linkedWf.name },
+          sections: [{ widgets: [
+            { textParagraph: { text: (applicantName || '前のワークフロー') + ' から連動起動されました' } },
+            { buttonList: { buttons: [{ text: '起動', onClick: { action: { function: cardActionFunc_(), parameters: params, interaction: 'OPEN_DIALOG' } } }] } }
+          ] }]
+        };
+        UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + parentSpace + '/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD', { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ cardsV2: [{ cardId: 'launcher_' + linkedWf.id + '_' + Date.now(), card: card }], thread: { name: threadName } }), muteHttpExceptions: true });
+      } catch (ePer) { Logger.log('postLauncherToThread_ 個別エラー pmn=' + pmn + ': ' + ePer.message); }
+    });
   } catch (err) { Logger.log('postLauncherToThread_ エラー: ' + err.message); try { notifyAdminOnError_(err, 'postLauncherToThread_'); } catch (e) {} }
 }
 
@@ -459,9 +500,12 @@ function handleApproval_(e) {
     var messageName = msgCol > 0 ? sheet.getRange(rowIndex, msgCol).getValue() : '';
     if (messageName) updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicantName, newStatus, emoji, headers);
     if (btn.threadReply && btn.replyMsg && messageName) {
-      // 送信先が空(=実行スペース返信)でも、messageName からスペースを抽出して返信先を特定する。
-      var replySpace = wf.targetSpace || (String(messageName).split('/messages/')[0] || '');
-      sendThreadReply_(replySpace, messageName, btn.replyMsg, applicantName, newStatus);
+      // 複数スペースに投稿していた場合は全スペースへスレッド返信する。
+      // messageName にはカンマ区切りでメッセージ名が保存されている。
+      String(messageName).split(',').map(function(s){return s.trim();}).filter(function(s){return s;}).forEach(function(mn){
+        var replySpace = String(mn).split('/messages/')[0] || '';
+        if (replySpace) sendThreadReply_(replySpace, mn, btn.replyMsg, applicantName, newStatus);
+      });
     }
     writeAuditLog_('approval.' + (newStatus === '承認' ? 'approve' : 'decide'), 'wid=' + workflowId + ' row=' + rowIndex, newStatus + '/' + applicantName + (tokenCheck.legacy ? ' [legacy-token]' : ''));
     try { incrementDailyCounter_('approval', 1); } catch (e4) {}
@@ -474,7 +518,11 @@ function handleApproval_(e) {
   finally { try { lock.releaseLock(); } catch (e2) {} }
 }
 
+// messageName はカンマ区切り複数ID対応。渡された全メッセージを同一内容で更新する。
+// 1つでも空文字/未解決なら無視する。
 function updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicantName, newStatus, emoji, headers) {
+  var names = String(messageName || '').split(',').map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+  if (names.length === 0) return;
   var widgets = [];
   widgets.push({ decoratedText: { topLabel: '送信者', text: applicantName } });
   fields.forEach(function(f) {
@@ -485,12 +533,17 @@ function updateApprovalCard_(wf, fields, sheet, rowIndex, messageName, applicant
   widgets.push({ decoratedText: { topLabel: 'ステータス', text: emoji + ' ' + newStatus } });
   try {
     var token = getServiceAccountToken_();
-    var upd = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + messageName + '?updateMask=cardsV2', { method: 'put', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify({ cardsV2: [{ cardId: 'approval_' + wf.id + '_' + rowIndex, card: { header: { title: emoji + ' ' + newStatus, subtitle: wf.name + ' - ' + applicantName }, sections: [{ widgets: widgets }] } }] }), muteHttpExceptions: true });
-    if (upd.getResponseCode() >= 400) {
-      var errMsg = 'approval card update HTTP ' + upd.getResponseCode() + ' ' + upd.getContentText().substring(0, 300);
-      Logger.log(errMsg);
-      try { notifyAdminOnError_(new Error(errMsg), 'updateApprovalCard_'); } catch (e2) {}
-    }
+    var payloadJson = JSON.stringify({ cardsV2: [{ cardId: 'approval_' + wf.id + '_' + rowIndex, card: { header: { title: emoji + ' ' + newStatus, subtitle: wf.name + ' - ' + applicantName }, sections: [{ widgets: widgets }] } }] });
+    names.forEach(function(mn) {
+      try {
+        var upd = UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + mn + '?updateMask=cardsV2', { method: 'put', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: payloadJson, muteHttpExceptions: true });
+        if (upd.getResponseCode() >= 400) {
+          var errMsg = 'approval card update HTTP ' + upd.getResponseCode() + ' ' + upd.getContentText().substring(0, 300) + ' msg=' + mn;
+          Logger.log(errMsg);
+          try { notifyAdminOnError_(new Error(errMsg), 'updateApprovalCard_'); } catch (e2) {}
+        }
+      } catch (ePerMsg) { Logger.log('カード更新 個別エラー msg=' + mn + ': ' + ePerMsg.message); }
+    });
   } catch (err) { Logger.log('カード更新エラー: ' + err.message); try { notifyAdminOnError_(err, 'updateApprovalCard_'); } catch (e3) {} }
 }
 

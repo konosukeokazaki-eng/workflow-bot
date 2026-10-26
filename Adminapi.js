@@ -559,14 +559,18 @@ function api_verifyWorkflowSetup(wid) {
     if (!wf) return { warnings: [] };
     var warnings = [];
     try {
-      if (wf.targetSpace) {
-        var vt = verifyBotAccess_(wf.targetSpace);
-        if (!vt.ok) warnings.push('送信先スペースに Bot が参加していません: ' + vt.error);
-      }
+      // 送信先スペースはカンマ区切り複数対応。全スペースについて Bot 参加チェックする。
+      var tgtList = parseSpaceIds_(wf.targetSpace);
+      var tgtSeen = {};
+      tgtList.forEach(function(sid){
+        tgtSeen[sid] = true;
+        var vt = verifyBotAccess_(sid);
+        if (!vt.ok) warnings.push('送信先スペース(' + sid + ')に Bot が参加していません: ' + vt.error);
+      });
       if (wf.execSpace) {
-        var execList = String(wf.execSpace).split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+        var execList = parseSpaceIds_(wf.execSpace);
         execList.forEach(function(sid){
-          if (sid === wf.targetSpace) return;
+          if (tgtSeen[sid]) return; // 送信先と重複する実行スペースは重複チェックしない
           var ve = verifyBotAccess_(sid);
           if (!ve.ok) warnings.push('実行スペース(' + sid + ')に Bot が参加していません: ' + ve.error);
         });

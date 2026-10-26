@@ -126,13 +126,14 @@ function renderEditor(){
     return '<input type="text" id="'+searchId+'" list="spDl" placeholder="'+spPh+'" value="'+esc(curName)+'" oninput="onSpaceInput(\''+searchId+'\',\''+hiddenId+'\')"'+(spacesLoading?' disabled':'')+'><input type="hidden" id="'+hiddenId+'" value="'+esc(curId||'')+'">';
   }
   // 複数選択用: チップ表示 + 入力 + 追加ボタン。hidden input にはカンマ区切りで ID を保存。
+  // hiddenId を引数化して複数のチップ入力(実行スペース/送信先スペース等)で使い回せるようにしている。
   function _spMultiInput(hiddenId,curIdsStr){
     var ids=String(curIdsStr||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
-    var chips=ids.map(function(id){var f=spaces.filter(function(s){return s.id===id;})[0];var nm=f?f.name:id;return '<span class="sp-chip" data-id="'+esc(id)+'">'+esc(nm)+'<span class="sp-chip-x" onclick="removeExecSpace(\''+esc(id)+'\')">×</span></span>';}).join('');
+    var chips=ids.map(function(id){var f=spaces.filter(function(s){return s.id===id;})[0];var nm=f?f.name:id;return '<span class="sp-chip" data-id="'+esc(id)+'">'+esc(nm)+'<span class="sp-chip-x" onclick="removeSpaceChip(\''+hiddenId+'\',\''+esc(id)+'\')">×</span></span>';}).join('');
     var searchId=hiddenId+'Search';
     return '<div class="sp-chip-box" id="'+hiddenId+'Chips">'+chips+'</div>'
-      +'<div style="display:flex;gap:6px;margin-top:6px"><input type="text" id="'+searchId+'" list="spDl" placeholder="'+spPh+'" '+(spacesLoading?'disabled':'')+' onkeydown="if(event.key===\'Enter\'){event.preventDefault();addExecSpace();}" style="flex:1">'
-      +'<button type="button" class="btn btn-sm" onclick="addExecSpace()">追加</button></div>'
+      +'<div style="display:flex;gap:6px;margin-top:6px"><input type="text" id="'+searchId+'" list="spDl" placeholder="'+spPh+'" '+(spacesLoading?'disabled':'')+' onkeydown="if(event.key===\'Enter\'){event.preventDefault();addSpaceChip(\''+hiddenId+'\');}" style="flex:1">'
+      +'<button type="button" class="btn btn-sm" onclick="addSpaceChip(\''+hiddenId+'\')">追加</button></div>'
       +'<input type="hidden" id="'+hiddenId+'" value="'+esc(ids.join(','))+'">';
   }
   var tab=wfEditorTab||'basic';
@@ -160,7 +161,7 @@ function renderEditor(){
   left+='<div class="editor-section'+(tab!=='basic'?' hidden':'')+'" id="secBasic">'
     +'<div class="form-row"><div class="form-group"><label>ワークフロー名</label><input type="text" id="wfName" value="'+esc(name)+'" oninput="markDirty();updatePreview()"><div class="error-msg" id="errName">ワークフロー名を入力してください</div></div><div class="form-group"><label>種類</label><select id="wfType" onchange="markDirty();renderEditor()"><option value="申請・承認"'+(type==='申請・承認'?' selected':'')+'>申請・承認</option><option value="定型文送信"'+(type==='定型文送信'?' selected':'')+'>定型文送信</option></select></div></div>'
     +'<div class="form-group"><label>説明文（任意）</label><input type="text" id="wfDescription" value="'+esc(description)+'" placeholder="このワークフローの用途を1行で説明" oninput="markDirty();updatePreview()" maxlength="200"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">カードのワークフロー名の下に小さく表示されます（最大200文字）。</div></div>'
-    +'<div class="form-row"><div class="form-group"><label>実行スペース（複数選択可）</label>'+_spMultiInput('wfExecSpace',es)+'<div class="error-msg" id="errExec">実行スペースを1つ以上選択してください</div></div><div class="form-group"><label>送信先スペース（任意）</label>'+_spInput('wfTargetSpaceSearch','wfTargetSpace',ts)+'<div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">空欄なら申請ボタンが押された実行スペースに送信されます。</div><div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'+spDl
+    +'<div class="form-row"><div class="form-group"><label>実行スペース（複数選択可）</label>'+_spMultiInput('wfExecSpace',es)+'<div class="error-msg" id="errExec">実行スペースを1つ以上選択してください</div></div><div class="form-group"><label>送信先スペース（任意・複数選択可）</label>'+_spMultiInput('wfTargetSpace',ts)+'<div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">空欄なら申請ボタンが押された実行スペースに送信されます。複数指定するとどのスペースで承認/却下されても全スペースのカードが更新されます。</div><div class="error-msg" id="errTarget">送信先スペースを選択してください</div></div></div>'+spDl
     +'<div class="form-group"><label>共同編集者（メンバー権限のユーザでもこのワークフローを編集可）</label><input type="text" id="wfCollaborators" value="'+esc(wf?wf.collaborators||'':'')+'" placeholder="カンマ区切りでメール入力（例: a@example.com, b@example.com）" oninput="markDirty()"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">オーナー/エディタは全ワークフロー編集可。メンバーは自分作成分＋この欄に指定された場合のみ編集可。</div></div>'
     +'</div>';
   // Section 2: フォーム項目
@@ -202,26 +203,32 @@ function onSpaceInput(searchId,hiddenId){
   var h=document.getElementById(hiddenId);if(h)h.value=found?found.id:'';
   markDirty();
 }
-function addExecSpace(){
-  var inp=document.getElementById('wfExecSpaceSearch');if(!inp)return;
+// 複数チップ入力の汎用追加/削除。hiddenId を渡して実行スペース/送信先スペース共通で動く。
+function addSpaceChip(hiddenId){
+  var inp=document.getElementById(hiddenId+'Search');if(!inp)return;
   var name=String(inp.value||'').trim();if(!name)return;
   var found=spaces.filter(function(s){return s.name===name;})[0];
   if(!found){showToast('候補からスペースを選んでください');return;}
-  var h=document.getElementById('wfExecSpace');var cur=String(h.value||'').split(',').filter(function(s){return s;});
+  var h=document.getElementById(hiddenId);var cur=String(h.value||'').split(',').filter(function(s){return s;});
   if(cur.indexOf(found.id)!==-1){showToast('既に追加されています');return;}
   cur.push(found.id);h.value=cur.join(',');
-  var chipsEl=document.getElementById('wfExecSpaceChips');
-  chipsEl.insertAdjacentHTML('beforeend','<span class="sp-chip" data-id="'+esc(found.id)+'">'+esc(found.name)+'<span class="sp-chip-x" onclick="removeExecSpace(\''+esc(found.id)+'\')">×</span></span>');
-  inp.value='';markDirty();hideError('errExec');
+  var chipsEl=document.getElementById(hiddenId+'Chips');
+  chipsEl.insertAdjacentHTML('beforeend','<span class="sp-chip" data-id="'+esc(found.id)+'">'+esc(found.name)+'<span class="sp-chip-x" onclick="removeSpaceChip(\''+hiddenId+'\',\''+esc(found.id)+'\')">×</span></span>');
+  inp.value='';markDirty();
+  if(hiddenId==='wfExecSpace')hideError('errExec');
+  if(hiddenId==='wfTargetSpace')hideError('errTarget');
 }
-function removeExecSpace(id){
-  var h=document.getElementById('wfExecSpace');var cur=String(h.value||'').split(',').filter(function(s){return s&&s!==id;});
+function removeSpaceChip(hiddenId,id){
+  var h=document.getElementById(hiddenId);var cur=String(h.value||'').split(',').filter(function(s){return s&&s!==id;});
   h.value=cur.join(',');
-  var chipsEl=document.getElementById('wfExecSpaceChips');
+  var chipsEl=document.getElementById(hiddenId+'Chips');
   var chips=chipsEl.querySelectorAll('.sp-chip');
   for(var i=0;i<chips.length;i++){if(chips[i].getAttribute('data-id')===id){chips[i].remove();break;}}
   markDirty();
 }
+// 後方互換ラッパー: 以前の実行スペース専用関数を残す。他ファイル/キャッシュHTMLから呼ばれても壊れないように。
+function addExecSpace(){ return addSpaceChip('wfExecSpace'); }
+function removeExecSpace(id){ return removeSpaceChip('wfExecSpace',id); }
 function initSortable(){
   var fl=document.getElementById('fieldList');if(fl)Sortable.create(fl,{animation:150,ghostClass:'sortable-ghost',chosenClass:'sortable-chosen',handle:'.field-grip',onEnd:function(e){var it=currentFields.splice(e.oldIndex,1)[0];currentFields.splice(e.newIndex,0,it);markDirty();updatePreview();}});
   var bl=document.getElementById('btnList');if(bl)Sortable.create(bl,{animation:150,ghostClass:'sortable-ghost',handle:'.field-grip',onEnd:function(e){var it=currentButtons.splice(e.oldIndex,1)[0];currentButtons.splice(e.newIndex,0,it);markDirty();updatePreview();}});
@@ -481,20 +488,38 @@ function showFieldDiffConfirm(diff, onOk){
    Approver Picker Modal - 送信先スペースのメンバーから承認者選択
    ============================================================ */
 function openApproverPicker(){
-  var ts=val('wfTargetSpace');
-  if(!ts){
-    var es=String(val('wfExecSpace')||'').split(',').filter(function(s){return s;});
-    if(es.length){ts=es[0];}
+  // 送信先スペース(複数対応)から 1 つ、または実行スペースから 1 つを選んでメンバー一覧を引く。
+  var tsList=String(val('wfTargetSpace')||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+  var esList=String(val('wfExecSpace')||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+  var candidates=tsList.length?tsList:esList;
+  if(!candidates.length){showToast('先に実行スペース or 送信先スペースを選択してください');return;}
+  var defaultSpace=candidates[0];
+  var selectorHtml='';
+  if(candidates.length>1){
+    selectorHtml='<div class="form-group" style="margin:8px 0"><label style="font-size:12px">メンバー取得元スペース</label>'
+      +'<select id="apkSpaceSel" onchange="reloadApproverPickerMembers()" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px">'
+      +candidates.map(function(sid){var f=spaces.filter(function(s){return s.id===sid;})[0];var nm=f?f.name:sid;return '<option value="'+esc(sid)+'">'+esc(nm)+'</option>';}).join('')
+      +'</select></div>';
   }
-  if(!ts){showToast('先に実行スペース or 送信先スペースを選択してください');return;}
   var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
   ov.innerHTML='<div class="modal" style="max-width:520px"><h3>メンバーから承認者を選択</h3>'
     +'<p style="font-size:12px;color:var(--c-text-muted);margin:8px 0">送信先スペースのメンバーから選択できます。選択した相手には申請投稿時に @メンション通知が飛びます。</p>'
+    +selectorHtml
     +'<div style="margin:8px 0"><input type="text" id="apkSearch" placeholder="名前で絞り込み" oninput="filterApproverPicker()" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px"></div>'
     +'<div id="apkList" style="max-height:340px;overflow:auto;border:1px solid var(--c-border);border-radius:8px;padding:6px"><div class="empty" style="padding:20px">読み込み中...</div></div>'
     +'<div style="font-size:11px;color:var(--c-text-muted);margin-top:6px"><span id="apkCount">0名選択中</span></div>'
     +'<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="applyApproverPicker()">決定</button></div></div>';
   document.body.appendChild(ov);
+  window.__apkLoadFor=defaultSpace;
+  _loadApproverMembers(defaultSpace);
+}
+function reloadApproverPickerMembers(){
+  var sel=document.getElementById('apkSpaceSel');if(!sel)return;
+  window.__apkLoadFor=sel.value;
+  document.getElementById('apkList').innerHTML='<div class="empty" style="padding:20px">読み込み中...</div>';
+  _loadApproverMembers(sel.value);
+}
+function _loadApproverMembers(ts){
   showLoading('メンバー取得中...');
   google.script.run.withSuccessHandler(function(members){
     hideLoading();
@@ -680,7 +705,7 @@ function showHelp(){
     +'<li><b>ワークフロー名</b>:一目でわかる名前をつけてください(例:「有給休暇申請」)。この名前はスプレッドシートのシート名にもなります。</li>'
     +'<li><b>種類</b>:「申請・承認」か「定型文送信」を選びます。「定型文送信」を選ぶとチップ③は「通知設定」に変わり、承認者/ボタン設定が非表示になります。</li>'
     +'<li><b>実行スペース(複数選択可)</b>:申請ボタンを設置する Google Chat のスペースを選びます。候補から名前を入力して「追加」ボタンで複数登録でき、同じワークフローを複数スペースに展開できます。</li>'
-    +'<li><b>送信先スペース(任意)</b>:申請内容の通知を届けたい Google Chat のスペースを選びます。<b>空欄にすると、申請ボタンが押された実行スペースにそのまま返信されます</b>(スペースごとに通知を分けたい場合に便利)。全申請を特定のスペースに集約したい場合のみ、明示的に指定してください。</li>'
+    +'<li><b>送信先スペース(任意・複数選択可)</b>:申請内容の通知を届けたい Google Chat のスペースを選びます。<b>空欄にすると、申請ボタンが押された実行スペースにそのまま返信されます</b>(スペースごとに通知を分けたい場合に便利)。全申請を特定のスペースに集約したい場合のみ、明示的に指定してください。<b>複数指定した場合は全スペースに同じカードが投稿され、どのスペースで承認/却下されても全スペースのカードが結果に更新されます。</b></li>'
     +'</ul>'
     +'<h5>②フォーム項目</h5>'
     +'<p>申請者が入力する項目を、必要な数だけ追加します。「＋ 項目を追加」で追加でき、以下の種類から選べます。</p>'

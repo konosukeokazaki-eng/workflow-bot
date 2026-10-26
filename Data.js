@@ -2,6 +2,13 @@
 // Data.gs - データアクセス + 外部スプレッドシート
 // ============================================================
 
+// カンマ区切り送信先スペースIDをパースして配列化する。空要素/空白は除外。
+// 送信先スペース(targetSpace)/実行スペース(execSpace)共通で利用する。
+// 単一ID("spaces/AAA")でも配列(["spaces/AAA"])で返す。空文字なら [] を返す。
+function parseSpaceIds_(raw) {
+  return String(raw || '').split(',').map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+}
+
 // エラーをログ + 監査ログ + 直近エラーを ScriptProperties に記録
 function recordDataError_(source, err) {
   var msg = err && err.message ? err.message : String(err);
