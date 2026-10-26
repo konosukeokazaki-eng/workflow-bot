@@ -567,7 +567,8 @@ function _synthValuesForFields_(fields) {
       case 'textarea': vals[f.name] = '診断テスト本文'; break;
       case 'dropdown':
       case 'checkbox':
-        var opts = String(f.options || '').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+        // "選択肢=email;..." 構文に対応するため label のみを使う
+        var opts = (typeof extractLabelsFromOptions_ === 'function') ? extractLabelsFromOptions_(f.options) : String(f.options || '').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
         vals[f.name] = opts[0] || '';
         break;
       case 'date': vals[f.name] = new Date().toLocaleDateString('ja-JP'); break;

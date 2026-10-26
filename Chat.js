@@ -82,8 +82,18 @@ function buildWorkflowDialogCard_(workflowId, prefill, errors, navMode, chain, i
     switch (f.type) {
       case 'text': widgets.push({ textInput: { label: label, name: 'field_' + f.order, type: 'SINGLE_LINE', value: pv } }); break;
       case 'textarea': widgets.push({ textInput: { label: label, name: 'field_' + f.order, type: 'MULTIPLE_LINE', value: pv } }); break;
-      case 'dropdown': widgets.push({ selectionInput: { label: label, name: 'field_' + f.order, type: 'DROPDOWN', items: f.options.split(',').map(function(o, i) { var t = o.trim(); return { text: t, value: t, selected: pv ? (pv === t) : (i === 0) }; }) } }); break;
-      case 'checkbox': var sels = pv ? pv.split(',').map(function(s){return s.trim();}) : []; widgets.push({ selectionInput: { label: label, name: 'field_' + f.order, type: 'CHECK_BOX', items: f.options.split(',').map(function(o) { var t = o.trim(); return { text: t, value: t, selected: sels.indexOf(t) !== -1 }; }) } }); break;
+      case 'dropdown': {
+        // "選択肢=email;..." 構文に対応: label のみを UI/値に使う(email 部分は内部メタ)
+        var ddLabels = extractLabelsFromOptions_(f.options);
+        widgets.push({ selectionInput: { label: label, name: 'field_' + f.order, type: 'DROPDOWN', items: ddLabels.map(function(t, i) { return { text: t, value: t, selected: pv ? (pv === t) : (i === 0) }; }) } });
+        break;
+      }
+      case 'checkbox': {
+        var cbLabels = extractLabelsFromOptions_(f.options);
+        var sels = pv ? pv.split(',').map(function(s){return s.trim();}) : [];
+        widgets.push({ selectionInput: { label: label, name: 'field_' + f.order, type: 'CHECK_BOX', items: cbLabels.map(function(t) { return { text: t, value: t, selected: sels.indexOf(t) !== -1 }; }) } });
+        break;
+      }
       case 'date':
         var dp = { label: label, name: 'field_' + f.order, type: 'DATE_ONLY' };
         if (pv) { var pd = new Date(pv); if (!isNaN(pd.getTime())) dp.valueMsEpoch = pd.getTime(); }
@@ -242,8 +252,16 @@ function handleSubmitWorkflow_(event) {
     // 送信先スペースはカンマ区切り複数対応。空欄なら実行スペース(ボタンが押されたスペース)にフォールバック。
     var destSpaces = parseSpaceIds_(wf.targetSpace);
     if (destSpaces.length === 0 && currentSpace) destSpaces = [currentSpace];
-    if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces, chain, inheritFrom);
-    else sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom);
+    // 選択肢連動メンション: dropdown/checkbox の "選択肢=email;..." から email を集約し userId に解決。
+    // 失敗してもメイン送信は止めない(ベストエフォート)。
+    var optionMentionUserIds = [];
+    try {
+      var mentionEmails = collectMentionEmailsFromValues_(fields, values);
+      if (mentionEmails.length) optionMentionUserIds = resolveEmailsToUserIds_(mentionEmails);
+      if (mentionEmails.length) Logger.log('option mentions emails=' + mentionEmails.join(',') + ' resolved=' + optionMentionUserIds.join(','));
+    } catch (eOm) { Logger.log('option mention resolve skip: ' + eOm.message); }
+    if (wf.type === '申請・承認') sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces, chain, inheritFrom, optionMentionUserIds);
+    else sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom, optionMentionUserIds);
     // 連動元(親)ワークフローのステータスを更新する。親カードもあわせて再描画する。
     if (parentInfo && parentInfo.parentStatus) {
       try { updateParentStatus_(parentInfo.parentWorkflowId, parentInfo.parentRow, parentInfo.parentStatus); }
@@ -255,7 +273,7 @@ function handleSubmitWorkflow_(event) {
   }
 }
 
-function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces, chain, inheritFrom) {
+function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces, chain, inheritFrom, optionMentionUserIds) {
   // 後方互換: 旧シグネチャ(destSpace=string)で呼ばれても動くよう正規化。
   if (typeof destSpaces === 'string') destSpaces = parseSpaceIds_(destSpaces);
   if (!destSpaces || !destSpaces.length) destSpaces = parseSpaceIds_(wf.targetSpace);
@@ -287,13 +305,17 @@ function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces,
   // 承認者 User ID が保存されていれば message.text にメンションを付与して通知を飛ばす。
   // カード内 widget のメンションは通知が飛ばないため、message.text に載せる必要がある。
   var mentionText = '';
+  // 承認者メンションと選択肢連動メンションをマージする。重複排除。
+  var allMentionIds = [];
+  var seenMid = {};
   if (wf.approverUserIds) {
-    var ids = String(wf.approverUserIds).split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-    if (ids.length > 0) {
-      var msg = String(wf.mentionText || '承認をお願いします');
-      msg = msg.replace(/\{申請者\}/g, senderName).replace(/\{ワークフロー\}/g, wf.name);
-      mentionText = ids.map(function(id) { return '<users/' + id + '>'; }).join(' ') + ' ' + msg;
-    }
+    String(wf.approverUserIds).split(',').map(function(s){return s.trim();}).filter(function(s){return s;}).forEach(function(id){ if (!seenMid[id]) { seenMid[id] = true; allMentionIds.push(id); } });
+  }
+  (optionMentionUserIds || []).forEach(function(id){ if (id && !seenMid[id]) { seenMid[id] = true; allMentionIds.push(id); } });
+  if (allMentionIds.length > 0) {
+    var msg = String(wf.mentionText || '承認をお願いします');
+    msg = msg.replace(/\{申請者\}/g, senderName).replace(/\{ワークフロー\}/g, wf.name);
+    mentionText = allMentionIds.map(function(id) { return '<users/' + id + '>'; }).join(' ') + ' ' + msg;
   }
   try {
     var token = getServiceAccountToken_();
@@ -334,7 +356,7 @@ function sendApprovalCard_(wf, fields, values, senderName, rowIndex, destSpaces,
   } catch (err) { Logger.log('カード送信エラー: ' + err.message); }
 }
 
-function sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom) {
+function sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom, optionMentionUserIds) {
   // 後方互換: 旧シグネチャ(destSpace=string)で呼ばれても動くよう正規化。
   if (typeof destSpaces === 'string') destSpaces = parseSpaceIds_(destSpaces);
   if (!destSpaces || !destSpaces.length) destSpaces = parseSpaceIds_(wf.targetSpace);
@@ -342,6 +364,12 @@ function sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom) 
     var widgets = [];
     widgets.push({ decoratedText: { topLabel: '送信者', text: senderName } });
     fields.forEach(function(f) { widgets.push({ decoratedText: { topLabel: f.name, text: String(values[f.name]) || '(なし)', wrapText: true } }); });
+    // 選択肢連動メンション(定型文は承認者概念がないので optionMentionUserIds のみ)。
+    var infoMentionText = '';
+    var infoIds = [];
+    var seenI = {};
+    (optionMentionUserIds || []).forEach(function(id){ if (id && !seenI[id]) { seenI[id] = true; infoIds.push(id); } });
+    if (infoIds.length) infoMentionText = infoIds.map(function(id){ return '<users/' + id + '>'; }).join(' ');
     var token = getServiceAccountToken_();
     // 定型文はスレッド継承時のみ親スペース、それ以外は全送信先スペースに投稿する。
     var targets = [];
@@ -357,6 +385,7 @@ function sendInfoCard_(wf, fields, values, senderName, destSpaces, inheritFrom) 
     targets.forEach(function(t) {
       try {
         var payload = { cardsV2: [{ cardId: 'info_' + wf.id + '_' + Date.now(), card: { header: { title: '📝 ' + wf.name, subtitle: senderName }, sections: [{ widgets: widgets }] } }] };
+        if (infoMentionText) payload.text = infoMentionText;
         var urlSuffix = '';
         if (t.thread) { payload.thread = { name: t.thread }; urlSuffix = '?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD'; }
         UrlFetchApp.fetch('https://chat.googleapis.com/v1/' + t.space + '/messages' + urlSuffix, { method: 'post', contentType: 'application/json', headers: { 'Authorization': 'Bearer ' + token }, payload: JSON.stringify(payload), muteHttpExceptions: true });
