@@ -287,12 +287,99 @@ function parseQtyOptions(raw){
 function buildQtyOptions(opts,qtype,qopts){
   return (opts||'')+'###'+(qtype||'number')+'###'+(qopts||'');
 }
+// options 文字列 "A=x@y;z@y,B,C=foo@bar" → [{label,emails:[...]}] (JS側パース、Data.jsの仕様と一致)
+function parseOptionsToRows_(raw){
+  var out=[];
+  String(raw||'').split(',').forEach(function(seg){
+    var s=String(seg||'').trim();
+    if(!s)return;
+    var eq=s.indexOf('=');
+    if(eq<0){out.push({label:s,emails:[]});return;}
+    var label=s.substring(0,eq).trim();
+    var tail=s.substring(eq+1).trim();
+    if(!label)return;
+    var emails=tail?tail.split(';').map(function(e){return e.trim();}).filter(function(e){return e&&e.indexOf('@')>0;}):[];
+    out.push({label:label,emails:emails});
+  });
+  return out;
+}
+// 表UI の DOM 状態 → options 文字列へ再生成
+function buildOptionsFromTable_(){
+  var tbody=document.getElementById('fOptsTbody');
+  if(!tbody)return '';
+  var parts=[];
+  [].slice.call(tbody.querySelectorAll('tr.optRow')).forEach(function(tr){
+    var label=(tr.querySelector('.optLabel').value||'').trim();
+    if(!label)return;
+    // ラベル内のカンマは区切り文字と衝突するため除去（警告のみ）
+    label=label.replace(/,/g,'');
+    var emails=(tr.getAttribute('data-emails')||'').split(';').map(function(e){return e.trim();}).filter(function(e){return e&&e.indexOf('@')>0;});
+    if(emails.length){parts.push(label+'='+emails.join(';'));}
+    else{parts.push(label);}
+  });
+  return parts.join(',');
+}
+function renderOptionsTableRow_(row){
+  var emails=row.emails||[];
+  var chipsHtml=emails.map(function(e){return '<span class="optChip" style="display:inline-flex;align-items:center;gap:4px;background:var(--c-bg-alt,#eef2f7);border-radius:12px;padding:2px 8px;margin:2px;font-size:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="overflow:hidden;text-overflow:ellipsis">'+esc(e)+'</span><button type="button" onclick="removeOptEmail(this,\''+esc(e).replace(/'/g,"&#39;")+'\')" style="background:none;border:none;cursor:pointer;color:var(--c-text-muted);padding:0;font-size:14px;line-height:1">×</button></span>';}).join('');
+  return '<tr class="optRow" data-emails="'+esc(emails.join(';'))+'">'
+    +'<td style="padding:4px"><input type="text" class="optLabel" value="'+esc(row.label||'')+'" placeholder="選択肢名" style="width:100%;padding:6px 8px;border:1px solid var(--c-border);border-radius:6px;font-size:13px"></td>'
+    +'<td style="padding:4px;min-width:220px"><div class="optChips" style="min-height:30px;display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:3px;border:1px dashed var(--c-border);border-radius:6px;background:#fafbfc">'+(chipsHtml||'<span style="font-size:11px;color:var(--c-text-muted);padding:4px 6px">メンション先なし</span>')+'</div>'
+    +'<button type="button" class="btn btn-sm" onclick="openOptionMemberPicker(this)" style="margin-top:4px;font-size:11px;padding:4px 10px">👤 メンバー選択</button></td>'
+    +'<td style="padding:4px;width:40px;text-align:center"><button type="button" onclick="removeOptionRow(this)" title="この行を削除" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:18px">🗑</button></td>'
+    +'</tr>';
+}
+function renderOptionsTable_(rows){
+  if(!rows||!rows.length)rows=[{label:'',emails:[]}];
+  var tableHtml='<div style="font-size:11px;color:var(--c-text-muted);margin-bottom:6px">各行に「選択肢名」を入力し、必要なら「メンバー選択」でメンション先を指定してください。選択肢が選ばれた時、指定した相手に自動で@メンション通知が飛びます。</div>'
+    +'<table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--c-text-muted);text-align:left"><th style="padding:4px;width:34%">選択肢名</th><th style="padding:4px">メンション先（任意）</th><th style="padding:4px;width:40px"></th></tr></thead>'
+    +'<tbody id="fOptsTbody">'+rows.map(renderOptionsTableRow_).join('')+'</tbody></table>'
+    +'<button type="button" class="btn btn-sm" onclick="addOptionRow()" style="margin-top:8px">＋ 行を追加</button>';
+  return tableHtml;
+}
+function addOptionRow(){
+  var tbody=document.getElementById('fOptsTbody');if(!tbody)return;
+  var tmp=document.createElement('tbody');tmp.innerHTML=renderOptionsTableRow_({label:'',emails:[]});
+  tbody.appendChild(tmp.firstChild);
+}
+function removeOptionRow(btn){
+  var tbody=document.getElementById('fOptsTbody');var tr=btn.closest('tr');
+  tr.parentNode.removeChild(tr);
+  if(!tbody.querySelector('tr.optRow'))addOptionRow();
+}
+function removeOptEmail(btn,email){
+  var tr=btn.closest('tr.optRow');if(!tr)return;
+  var emails=(tr.getAttribute('data-emails')||'').split(';').filter(function(e){return e&&e!==email;});
+  tr.setAttribute('data-emails',emails.join(';'));
+  refreshOptionChips_(tr);
+}
+function refreshOptionChips_(tr){
+  var emails=(tr.getAttribute('data-emails')||'').split(';').filter(function(e){return e;});
+  var container=tr.querySelector('.optChips');
+  if(emails.length){
+    container.innerHTML=emails.map(function(e){return '<span class="optChip" style="display:inline-flex;align-items:center;gap:4px;background:var(--c-bg-alt,#eef2f7);border-radius:12px;padding:2px 8px;margin:2px;font-size:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="overflow:hidden;text-overflow:ellipsis">'+esc(e)+'</span><button type="button" onclick="removeOptEmail(this,\''+esc(e).replace(/'/g,"&#39;")+'\')" style="background:none;border:none;cursor:pointer;color:var(--c-text-muted);padding:0;font-size:14px;line-height:1">×</button></span>';}).join('');
+  }else{
+    container.innerHTML='<span style="font-size:11px;color:var(--c-text-muted);padding:4px 6px">メンション先なし</span>';
+  }
+}
+function openOptionMemberPicker(btn){
+  var tr=btn.closest('tr.optRow');if(!tr)return;
+  var current=(tr.getAttribute('data-emails')||'').split(';').filter(function(e){return e;});
+  window.__optPickerTargetRow=tr;
+  openMemberPickerForOption_(current,function(emails){
+    tr.setAttribute('data-emails',emails.join(';'));
+    refreshOptionChips_(tr);
+  });
+}
+
 function showFieldModal(idx){
   var f=idx>=0?currentFields[idx]:{name:'',type:'text',options:'',required:false};
   var qp=f.type==='checkbox_qty'?parseQtyOptions(f.options):{opts:f.options||'',qtype:'number',qopts:'1,2,3,5,10'};
   var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov)ov.remove();};
   var optsVal=f.type==='checkbox_qty'?qp.opts:(f.options||'');
-  ov.innerHTML='<div class="modal"><h3>'+(idx>=0?'項目の編集':'項目の追加')+'</h3>'
+  var tableRows=parseOptionsToRows_(f.type==='checkbox_qty'?'':optsVal);
+  var isTableType=(f.type==='dropdown'||f.type==='checkbox');
+  ov.innerHTML='<div class="modal" style="max-width:620px"><h3>'+(idx>=0?'項目の編集':'項目の追加')+'</h3>'
     +'<div class="form-group"><label>項目名</label><input type="text" id="fName" value="'+esc(f.name)+'"><div class="error-msg" id="errFName">項目名を入力してください</div></div>'
     +'<div class="form-group"><label>入力タイプ</label><select id="fType" onchange="toggleOpts()">'
     +'<option value="text"'+(f.type==='text'?' selected':'')+'>テキスト（1行）</option>'
@@ -302,7 +389,9 @@ function showFieldModal(idx){
     +'<option value="checkbox_qty"'+(f.type==='checkbox_qty'?' selected':'')+'>数量付きチェックボックス</option>'
     +'<option value="date"'+(f.type==='date'?' selected':'')+'>日付</option>'
     +'</select></div>'
-    +'<div class="form-group" id="optsG" style="'+((f.type==='dropdown'||f.type==='checkbox'||f.type==='checkbox_qty')?'':'display:none')+'"><label>選択肢（カンマ区切り）</label><input type="text" id="fOpts" value="'+esc(optsVal)+'" placeholder="例: 消しゴム, ノート, ペン"><div style="font-size:11px;color:var(--c-text-muted);margin-top:4px">プルダウン/チェックボックスは <code>選択肢名=メール;メール</code> と書くと、その選択肢を選んだ時に該当メールへ自動 @メンション通知が飛びます（例: <code>営業部=sales@example.com;mgr@example.com, 経理部=keiri@example.com, 総務部</code>）。メール複数指定はセミコロン区切り。「=」なしは従来通りメンションなし。</div></div>'
+    +'<div class="form-group" id="optsTableG" style="'+(isTableType?'':'display:none')+'"><label>選択肢とメンション先</label>'
+    +'<div id="optsTableHost">'+renderOptionsTable_(tableRows)+'</div></div>'
+    +'<div class="form-group" id="optsG" style="'+(f.type==='checkbox_qty'?'':'display:none')+'"><label>選択肢（カンマ区切り）</label><input type="text" id="fOpts" value="'+esc(optsVal)+'" placeholder="例: 消しゴム, ノート, ペン"></div>'
     +'<div class="form-group" id="qtyTypeG" style="'+(f.type==='checkbox_qty'?'':'display:none')+'"><label>数量の入力タイプ</label><select id="fQtyType" onchange="toggleOpts()"><option value="number"'+(qp.qtype==='number'?' selected':'')+'>数値入力（自由入力）</option><option value="dropdown"'+(qp.qtype==='dropdown'?' selected':'')+'>プルダウン（候補から選択）</option></select></div>'
     +'<div class="form-group" id="qtyOptsG" style="'+(f.type==='checkbox_qty'&&qp.qtype==='dropdown'?'':'display:none')+'"><label>数量の候補（カンマ区切り）</label><input type="text" id="fQtyOpts" value="'+esc(qp.qopts)+'" placeholder="例: 1, 2, 5, 10"></div>'
     +'<div class="form-group"><div class="checkbox-row"><input type="checkbox" id="fReq"'+(f.required?' checked':'')+'><label for="fReq">必須項目にする</label></div></div>'
@@ -311,7 +400,17 @@ function showFieldModal(idx){
 }
 function toggleOpts(){
   var t=document.getElementById('fType').value;
-  document.getElementById('optsG').style.display=(t==='dropdown'||t==='checkbox'||t==='checkbox_qty')?'':'none';
+  var isTable=(t==='dropdown'||t==='checkbox');
+  var tg=document.getElementById('optsTableG');if(tg)tg.style.display=isTable?'':'none';
+  // 切替時に、未初期化なら既存 options 文字列から展開
+  if(isTable){
+    var host=document.getElementById('optsTableHost');
+    if(host&&!document.getElementById('fOptsTbody')){
+      var existing=document.getElementById('fOpts')?document.getElementById('fOpts').value:'';
+      host.innerHTML=renderOptionsTable_(parseOptionsToRows_(existing));
+    }
+  }
+  document.getElementById('optsG').style.display=(t==='checkbox_qty')?'':'none';
   document.getElementById('qtyTypeG').style.display=(t==='checkbox_qty')?'':'none';
   var qt=document.getElementById('fQtyType')?document.getElementById('fQtyType').value:'number';
   document.getElementById('qtyOptsG').style.display=(t==='checkbox_qty'&&qt==='dropdown')?'':'none';
@@ -322,11 +421,14 @@ function saveField(idx){
   hideError('errFName');
   var existingId=idx>=0?(currentFields[idx].fieldId||''):'';
   var t=document.getElementById('fType').value;
-  var opts=document.getElementById('fOpts')?document.getElementById('fOpts').value:'';
-  if(t==='checkbox_qty'){
+  var opts='';
+  if(t==='dropdown'||t==='checkbox'){
+    opts=buildOptionsFromTable_();
+  }else if(t==='checkbox_qty'){
+    var baseOpts=document.getElementById('fOpts')?document.getElementById('fOpts').value:'';
     var qt=document.getElementById('fQtyType').value;
     var qo=document.getElementById('fQtyOpts')?document.getElementById('fQtyOpts').value:'';
-    opts=buildQtyOptions(opts,qt,qo);
+    opts=buildQtyOptions(baseOpts,qt,qo);
   }
   var f={fieldId:existingId,name:n,type:t,options:opts,required:document.getElementById('fReq').checked,order:idx>=0?currentFields[idx].order:currentFields.length+1};
   if(idx>=0)currentFields[idx]=f;else currentFields.push(f);
@@ -558,6 +660,14 @@ function applyApproverPicker(){
   var selected=[].slice.call(document.querySelectorAll('.apkCbx:checked'));
   var emails=selected.map(function(cb){return cb.getAttribute('data-email');}).filter(function(e){return e;});
   var uids=selected.map(function(cb){return cb.getAttribute('data-uid');}).filter(function(u){return u;});
+  // 選択肢用コールバックモード: emails のみを渡し、呼び出し元で保存処理
+  if(typeof window.__apkOnApply==='function'){
+    var cb=window.__apkOnApply;window.__apkOnApply=null;
+    document.querySelector('.modal-overlay').remove();
+    cb(emails);
+    showToast(emails.length+'名を設定しました');
+    return;
+  }
   document.getElementById('wfApprovers').value=emails.join(', ');
   document.getElementById('wfApproverUserIds').value=uids.join(',');
   var h=document.getElementById('wfApproverIdsHint');
@@ -565,6 +675,58 @@ function applyApproverPicker(){
   markDirty();
   document.querySelector('.modal-overlay').remove();
   showToast(uids.length+'名を承認者に設定しました');
+}
+// 選択肢行用: 既存の承認者ピッカーを callback モードで流用。
+// currentEmails: 現在設定済みメールアドレス配列（事前チェック用）
+// onApply: ユーザーが決定ボタンを押したとき emails 配列で呼ばれる
+function openMemberPickerForOption_(currentEmails,onApply){
+  var tsList=String(val('wfTargetSpace')||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+  var esList=String(val('wfExecSpace')||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+  var candidates=tsList.length?tsList:esList;
+  if(!candidates.length){showToast('先に実行スペース or 送信先スペースを選択してください');return;}
+  var defaultSpace=candidates[0];
+  var selectorHtml='';
+  if(candidates.length>1){
+    selectorHtml='<div class="form-group" style="margin:8px 0"><label style="font-size:12px">メンバー取得元スペース</label>'
+      +'<select id="apkSpaceSel" onchange="reloadOptionMemberPickerMembers()" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px">'
+      +candidates.map(function(sid){var fs=spaces.filter(function(s){return s.id===sid;})[0];var nm=fs?fs.name:sid;return '<option value="'+esc(sid)+'">'+esc(nm)+'</option>';}).join('')
+      +'</select></div>';
+  }
+  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov){window.__apkOnApply=null;ov.remove();}};
+  ov.innerHTML='<div class="modal" style="max-width:520px"><h3>メンバーから選択（メンション先）</h3>'
+    +'<p style="font-size:12px;color:var(--c-text-muted);margin:8px 0">この選択肢が選ばれた時、ここで選んだ相手に自動で @メンション通知が飛びます。</p>'
+    +selectorHtml
+    +'<div style="margin:8px 0"><input type="text" id="apkSearch" placeholder="名前で絞り込み" oninput="filterOptionMemberPicker()" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px"></div>'
+    +'<div id="apkList" style="max-height:340px;overflow:auto;border:1px solid var(--c-border);border-radius:8px;padding:6px"><div class="empty" style="padding:20px">読み込み中...</div></div>'
+    +'<div style="font-size:11px;color:var(--c-text-muted);margin-top:6px"><span id="apkCount">0名選択中</span></div>'
+    +'<div class="actions"><button class="btn" onclick="window.__apkOnApply=null;this.closest(\'.modal-overlay\').remove()">キャンセル</button><button class="btn btn-primary" onclick="applyApproverPicker()">決定</button></div></div>';
+  document.body.appendChild(ov);
+  window.__apkOnApply=onApply;
+  window.__apkPreselectEmails=currentEmails||[];
+  window.__apkLoadFor=defaultSpace;
+  _loadApproverMembersForOption(defaultSpace);
+}
+function reloadOptionMemberPickerMembers(){
+  var sel=document.getElementById('apkSpaceSel');if(!sel)return;
+  window.__apkLoadFor=sel.value;
+  document.getElementById('apkList').innerHTML='<div class="empty" style="padding:20px">読み込み中...</div>';
+  _loadApproverMembersForOption(sel.value);
+}
+function _loadApproverMembersForOption(ts){
+  showLoading('メンバー取得中...');
+  google.script.run.withSuccessHandler(function(members){
+    hideLoading();
+    if(!members||!members.length){document.getElementById('apkList').innerHTML='<div class="empty" style="padding:20px">メンバーが取得できませんでした。Bot が対象スペースに参加していない可能性があります。</div>';return;}
+    window.__apkMembers=members;
+    // preselect: email ベースで一致を取る
+    var preEmails=(window.__apkPreselectEmails||[]).map(function(e){return String(e||'').toLowerCase();});
+    var preIds=members.filter(function(m){return m.email&&preEmails.indexOf(String(m.email).toLowerCase())>=0;}).map(function(m){return m.userId;});
+    renderApproverPicker(preIds);
+  }).withFailureHandler(function(e){hideLoading();document.getElementById('apkList').innerHTML='<div class="empty" style="padding:20px;color:var(--c-danger)">エラー: '+esc(e.message)+'</div>';}).api_getSpaceMembers(ts);
+}
+function filterOptionMemberPicker(){
+  var currentSelection=[].slice.call(document.querySelectorAll('.apkCbx:checked')).map(function(cb){return cb.getAttribute('data-uid');});
+  renderApproverPicker(currentSelection);
 }
 
 function deleteWf(){
