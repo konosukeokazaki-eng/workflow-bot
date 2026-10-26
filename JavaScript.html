@@ -47,7 +47,7 @@ function acceptPrivacy(){
   google.script.run.withSuccessHandler(function(r){hideLoading();if(r.success){document.querySelector('.modal-overlay').remove();showToast('ご同意ありがとうございます');}else{showToast('エラー: '+(r.error||''));}}).withFailureHandler(function(e){hideLoading();showToast('エラー: '+e.message);}).api_recordPrivacyAcceptance();
 }
 window.onbeforeunload=function(){if(isDirty)return '未保存の変更があります。ページを離れますか？';};
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){var ov=document.querySelector('.modal-overlay');if(ov)ov.remove();}});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){var ovs=document.querySelectorAll('.modal-overlay');if(ovs.length){ovs[ovs.length-1].remove();}}});
 
 /* ============================================================
    Sidebar List
@@ -307,13 +307,16 @@ function parseOptionsToRows_(raw){
 function buildOptionsFromTable_(){
   var tbody=document.getElementById('fOptsTbody');
   if(!tbody)return '';
+  // メンショントグルOFF時は email を書き出さない（意図しない残留防止）
+  var tg=document.getElementById('fOptMentionToggle');
+  var mentionOn=tg?!!tg.checked:true;
   var parts=[];
   [].slice.call(tbody.querySelectorAll('tr.optRow')).forEach(function(tr){
     var label=(tr.querySelector('.optLabel').value||'').trim();
     if(!label)return;
     // ラベル内のカンマは区切り文字と衝突するため除去（警告のみ）
     label=label.replace(/,/g,'');
-    var emails=(tr.getAttribute('data-emails')||'').split(';').map(function(e){return e.trim();}).filter(function(e){return e&&e.indexOf('@')>0;});
+    var emails=mentionOn?(tr.getAttribute('data-emails')||'').split(';').map(function(e){return e.trim();}).filter(function(e){return e&&e.indexOf('@')>0;}):[];
     if(emails.length){parts.push(label+'='+emails.join(';'));}
     else{parts.push(label);}
   });
@@ -324,23 +327,44 @@ function renderOptionsTableRow_(row){
   var chipsHtml=emails.map(function(e){return '<span class="optChip" style="display:inline-flex;align-items:center;gap:4px;background:var(--c-bg-alt,#eef2f7);border-radius:12px;padding:2px 8px;margin:2px;font-size:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="overflow:hidden;text-overflow:ellipsis">'+esc(e)+'</span><button type="button" onclick="removeOptEmail(this,\''+esc(e).replace(/'/g,"&#39;")+'\')" style="background:none;border:none;cursor:pointer;color:var(--c-text-muted);padding:0;font-size:14px;line-height:1">×</button></span>';}).join('');
   return '<tr class="optRow" data-emails="'+esc(emails.join(';'))+'">'
     +'<td style="padding:4px"><input type="text" class="optLabel" value="'+esc(row.label||'')+'" placeholder="選択肢名" style="width:100%;padding:6px 8px;border:1px solid var(--c-border);border-radius:6px;font-size:13px"></td>'
-    +'<td style="padding:4px;min-width:220px"><div class="optChips" style="min-height:30px;display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:3px;border:1px dashed var(--c-border);border-radius:6px;background:#fafbfc">'+(chipsHtml||'<span style="font-size:11px;color:var(--c-text-muted);padding:4px 6px">メンション先なし</span>')+'</div>'
+    +'<td class="optMentionCell" style="padding:4px;min-width:220px"><div class="optChips" style="min-height:30px;display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:3px;border:1px dashed var(--c-border);border-radius:6px;background:#fafbfc">'+(chipsHtml||'<span style="font-size:11px;color:var(--c-text-muted);padding:4px 6px">メンション先なし</span>')+'</div>'
     +'<button type="button" class="btn btn-sm" onclick="openOptionMemberPicker(this)" style="margin-top:4px;font-size:11px;padding:4px 10px">👤 メンバー選択</button></td>'
     +'<td style="padding:4px;width:40px;text-align:center"><button type="button" onclick="removeOptionRow(this)" title="この行を削除" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:18px">🗑</button></td>'
     +'</tr>';
 }
-function renderOptionsTable_(rows){
+function renderOptionsTable_(rows,mentionOn){
   if(!rows||!rows.length)rows=[{label:'',emails:[]}];
-  var tableHtml='<div style="font-size:11px;color:var(--c-text-muted);margin-bottom:6px">各行に「選択肢名」を入力し、必要なら「メンバー選択」でメンション先を指定してください。選択肢が選ばれた時、指定した相手に自動で@メンション通知が飛びます。</div>'
-    +'<table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--c-text-muted);text-align:left"><th style="padding:4px;width:34%">選択肢名</th><th style="padding:4px">メンション先（任意）</th><th style="padding:4px;width:40px"></th></tr></thead>'
+  // mentionOn 未指定時は、既存データに email があれば自動ON
+  if(typeof mentionOn==='undefined'){
+    mentionOn=rows.some(function(r){return r.emails&&r.emails.length;});
+  }
+  var toggleHtml='<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-bottom:8px;cursor:pointer;padding:6px 10px;background:var(--c-bg-alt,#f7f7f8);border-radius:6px">'
+    +'<input type="checkbox" id="fOptMentionToggle" '+(mentionOn?'checked':'')+' onchange="toggleOptMentionColumn()">'
+    +'<span>🔔 選択肢にメンションを設定する</span>'
+    +'<span style="font-size:11px;color:var(--c-text-muted)">（ONにすると選択肢ごとに通知先を指定できます）</span></label>';
+  var mentionHeadStyle=mentionOn?'':'display:none';
+  var tableHtml=toggleHtml
+    +'<div style="font-size:11px;color:var(--c-text-muted);margin-bottom:6px">各行に「選択肢名」を入力してください。</div>'
+    +'<table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--c-text-muted);text-align:left"><th style="padding:4px;width:34%">選択肢名</th><th class="optMentionHead" style="padding:4px;'+mentionHeadStyle+'">メンション先（任意）</th><th style="padding:4px;width:40px"></th></tr></thead>'
     +'<tbody id="fOptsTbody">'+rows.map(renderOptionsTableRow_).join('')+'</tbody></table>'
     +'<button type="button" class="btn btn-sm" onclick="addOptionRow()" style="margin-top:8px">＋ 行を追加</button>';
   return tableHtml;
 }
+// メンション列の表示/非表示を切替（table UI 自体は再描画しない：入力中の値を守る）
+function toggleOptMentionColumn(){
+  var tg=document.getElementById('fOptMentionToggle');if(!tg)return;
+  var on=!!tg.checked;
+  var head=document.querySelector('.optMentionHead');if(head)head.style.display=on?'':'none';
+  [].slice.call(document.querySelectorAll('.optMentionCell')).forEach(function(td){td.style.display=on?'':'none';});
+}
 function addOptionRow(){
   var tbody=document.getElementById('fOptsTbody');if(!tbody)return;
   var tmp=document.createElement('tbody');tmp.innerHTML=renderOptionsTableRow_({label:'',emails:[]});
-  tbody.appendChild(tmp.firstChild);
+  var newTr=tmp.firstChild;
+  tbody.appendChild(newTr);
+  // 現在のトグル状態に合わせて、新規行のメンション列を隠す
+  var tg=document.getElementById('fOptMentionToggle');
+  if(tg&&!tg.checked){var cell=newTr.querySelector('.optMentionCell');if(cell)cell.style.display='none';}
 }
 function removeOptionRow(btn){
   var tbody=document.getElementById('fOptsTbody');var tr=btn.closest('tr');
@@ -364,11 +388,15 @@ function refreshOptionChips_(tr){
 }
 function openOptionMemberPicker(btn){
   var tr=btn.closest('tr.optRow');if(!tr)return;
+  // tr を安定参照できるよう一時IDを付与（再描画対策）
+  if(!tr.id){tr.id='optRow_'+Date.now()+'_'+Math.floor(Math.random()*1000);}
+  var trId=tr.id;
   var current=(tr.getAttribute('data-emails')||'').split(';').filter(function(e){return e;});
-  window.__optPickerTargetRow=tr;
   openMemberPickerForOption_(current,function(emails){
-    tr.setAttribute('data-emails',emails.join(';'));
-    refreshOptionChips_(tr);
+    var trRef=document.getElementById(trId);
+    if(!trRef)return;
+    trRef.setAttribute('data-emails',emails.join(';'));
+    refreshOptionChips_(trRef);
   });
 }
 
@@ -660,10 +688,12 @@ function applyApproverPicker(){
   var selected=[].slice.call(document.querySelectorAll('.apkCbx:checked'));
   var emails=selected.map(function(cb){return cb.getAttribute('data-email');}).filter(function(e){return e;});
   var uids=selected.map(function(cb){return cb.getAttribute('data-uid');}).filter(function(u){return u;});
+  // ピッカー用overlayを安全に特定（複数overlayがある時に親モーダルを閉じないように）
+  var pickerOv=document.querySelector('.apkPickerOverlay')||document.querySelectorAll('.modal-overlay')[document.querySelectorAll('.modal-overlay').length-1];
   // 選択肢用コールバックモード: emails のみを渡し、呼び出し元で保存処理
   if(typeof window.__apkOnApply==='function'){
     var cb=window.__apkOnApply;window.__apkOnApply=null;
-    document.querySelector('.modal-overlay').remove();
+    if(pickerOv)pickerOv.remove();
     cb(emails);
     showToast(emails.length+'名を設定しました');
     return;
@@ -673,7 +703,7 @@ function applyApproverPicker(){
   var h=document.getElementById('wfApproverIdsHint');
   if(h)h.innerHTML=uids.length?'✅ '+uids.length+'名にメンション通知が飛びます':'※メンバーから選択すると承認時に @メンション通知が飛びます';
   markDirty();
-  document.querySelector('.modal-overlay').remove();
+  if(pickerOv)pickerOv.remove();
   showToast(uids.length+'名を承認者に設定しました');
 }
 // 選択肢行用: 既存の承認者ピッカーを callback モードで流用。
@@ -692,7 +722,12 @@ function openMemberPickerForOption_(currentEmails,onApply){
       +candidates.map(function(sid){var fs=spaces.filter(function(s){return s.id===sid;})[0];var nm=fs?fs.name:sid;return '<option value="'+esc(sid)+'">'+esc(nm)+'</option>';}).join('')
       +'</select></div>';
   }
-  var ov=mk('modal-overlay');ov.onclick=function(e){if(e.target===ov){window.__apkOnApply=null;ov.remove();}};
+  // 選択肢ピッカー専用クラスを付与：親モーダル(フィールド編集)との混同を防ぐ
+  var ov=mk('modal-overlay');ov.classList.add('apkPickerOverlay');
+  ov.onclick=function(e){
+    // ピッカーの外側(=ov自身)をクリックした時だけピッカーだけ閉じる。親モーダルは触らない
+    if(e.target===ov){e.stopPropagation();window.__apkOnApply=null;ov.remove();}
+  };
   ov.innerHTML='<div class="modal" style="max-width:520px"><h3>メンバーから選択（メンション先）</h3>'
     +'<p style="font-size:12px;color:var(--c-text-muted);margin:8px 0">この選択肢が選ばれた時、ここで選んだ相手に自動で @メンション通知が飛びます。</p>'
     +selectorHtml
