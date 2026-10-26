@@ -956,6 +956,43 @@ function _formatDiagReportText_(data, errs) {
   return lines.join('\n');
 }
 
+// 承認者ピッカーで「メール未取得」が出る原因を切り分けるための診断関数。
+// Apps Script エディタから `debug_resolveMembers()` を手動実行する。
+// 対象スペースはワークフロー設定の送信先/実行スペース先頭を自動で拾う。
+function debug_resolveMembers() {
+  var cache = CacheService.getScriptCache();
+  var out = [];
+  var email = Session.getActiveUser().getEmail();
+  out.push('runner=' + email);
+  var wfs = getActiveWorkflows_();
+  var spaceId = '';
+  for (var i = 0; i < wfs.length && !spaceId; i++) {
+    var cand = String(wfs[i].targetSpace || wfs[i].execSpace || '').split(',')[0].trim();
+    if (cand) spaceId = cand;
+  }
+  if (!spaceId) { out.push('ERROR: スペースが見つかりません'); return out.join('\n'); }
+  out.push('spaceId=' + spaceId);
+  var cacheKey = 'space_members_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, spaceId)).substring(0, 24);
+  cache.remove(cacheKey);
+  out.push('cache cleared');
+  try {
+    var impTok = getImpersonatedToken_(email, 'https://www.googleapis.com/auth/admin.directory.user.readonly');
+    out.push('DWD impersonation OK (admin.directory.user.readonly) token_len=' + (impTok ? impTok.length : 0));
+  } catch (e) {
+    out.push('DWD impersonation FAILED: ' + e.message);
+    out.push('→ Workspace管理コンソールのDWDスコープ許可を確認してください');
+  }
+  var members = api_getSpaceMembers(spaceId);
+  out.push('members=' + members.length);
+  var withEmail = members.filter(function(m){return m.email;}).length;
+  out.push('with_email=' + withEmail);
+  out.push('without_email=' + (members.length - withEmail));
+  members.slice(0, 5).forEach(function(m){
+    out.push('  - ' + (m.displayName || '(no name)') + ' / email=' + (m.email || '(empty)') + ' / uid=' + m.userId);
+  });
+  return out.join('\n');
+}
+
 function _saveDiagReportToDrive_(text, suite) {
   try {
     var folderName = 'workflow-bot 診断レポート';
